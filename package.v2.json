@@ -1,13 +1,14 @@
 {
   "CustomTorrentRemover": {
     "name": "自动删种（自用版）",
-    "description": "按条件自动暂停或删除下载器中的下载任务。",
+    "description": "按条件处理种子，并在空间不足时补充删除最老种子。",
     "labels": "做种,下载管理",
-    "version": "1.0.0",
+    "version": "1.1.0",
     "icon": "delete.jpg",
     "author": "jxxghp, Picarse",
     "level": 2,
     "history": {
+      "v1.1.0": "增加空间不足补充删种、至少5个主种、辅种联动和全局仅预览模式",
       "v1.0.0": "基于官方 TorrentRemover v2.3 创建独立自用版本，默认动作为暂停"
     }
   }

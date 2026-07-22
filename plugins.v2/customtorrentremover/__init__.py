@@ -22,11 +22,11 @@ class CustomTorrentRemover(_PluginBase):
     # 插件名称
     plugin_name = "自动删种（自用版）"
     # 插件描述
-    plugin_desc = "按条件自动暂停或删除下载器中的下载任务。"
+    plugin_desc = "按条件处理种子，并在空间不足时补充删除最老种子。"
     # 插件图标
     plugin_icon = "delete.jpg"
     # 插件版本
-    plugin_version = "1.0.0"
+    plugin_version = "1.1.0"
     # 插件作者
     plugin_author = "jxxghp, Picarse"
     # 作者主页
@@ -44,6 +44,11 @@ class CustomTorrentRemover(_PluginBase):
     _enabled = False
     _onlyonce = False
     _notify = False
+    _regular_enabled = True
+    _preview = False
+    _supplement_enabled = False
+    _supplement_target_gb = None
+    _supplement_min_count = 5
     # pause/delete
     _downloaders = []
     _action = "pause"
@@ -68,8 +73,13 @@ class CustomTorrentRemover(_PluginBase):
             self._enabled = config.get("enabled")
             self._onlyonce = config.get("onlyonce")
             self._notify = config.get("notify")
+            self._regular_enabled = config.get("regular_enabled", True)
+            self._preview = config.get("preview", False)
+            self._supplement_enabled = config.get("supplement_enabled", False)
+            self._supplement_target_gb = config.get("supplement_target_gb")
+            self._supplement_min_count = config.get("supplement_min_count") or 5
             self._downloaders = config.get("downloaders") or []
-            self._action = config.get("action")
+            self._action = config.get("action") or "pause"
             self._cron = config.get("cron")
             self._samedata = config.get("samedata")
             self._mponly = config.get("mponly")
@@ -101,6 +111,11 @@ class CustomTorrentRemover(_PluginBase):
                 self.update_config({
                     "enabled": self._enabled,
                     "notify": self._notify,
+                    "regular_enabled": self._regular_enabled,
+                    "preview": self._preview,
+                    "supplement_enabled": self._supplement_enabled,
+                    "supplement_target_gb": self._supplement_target_gb,
+                    "supplement_min_count": self._supplement_min_count,
                     "onlyonce": self._onlyonce,
                     "action": self._action,
                     "cron": self._cron,
@@ -126,7 +141,8 @@ class CustomTorrentRemover(_PluginBase):
                     self._scheduler.start()
 
     def get_state(self) -> bool:
-        return True if self._enabled and self._cron and self._downloaders else False
+        has_task = self._regular_enabled or self._supplement_enabled
+        return True if self._enabled and has_task and self._cron and self._downloaders else False
 
     @staticmethod
     def get_command() -> List[Dict[str, Any]]:
@@ -192,6 +208,125 @@ class CustomTorrentRemover(_PluginBase):
                                         'props': {
                                             'model': 'notify',
                                             'label': '发送通知',
+                                        }
+                                    }
+                                ]
+                            }
+                        ]
+                    },
+                    {
+                        'component': 'VRow',
+                        'content': [
+                            {
+                                'component': 'VCol',
+                                'props': {
+                                    'cols': 12,
+                                    'md': 6
+                                },
+                                'content': [
+                                    {
+                                        'component': 'VTextField',
+                                        'props': {
+                                            'model': 'supplement_target_gb',
+                                            'label': '目标可用空间（GB）',
+                                            'type': 'number',
+                                            'min': 1,
+                                            'hint': '低于此值时触发补充删种',
+                                            'persistent-hint': True
+                                        }
+                                    }
+                                ]
+                            },
+                            {
+                                'component': 'VCol',
+                                'props': {
+                                    'cols': 12,
+                                    'md': 6
+                                },
+                                'content': [
+                                    {
+                                        'component': 'VTextField',
+                                        'props': {
+                                            'model': 'supplement_min_count',
+                                            'label': '每轮最少主种数',
+                                            'type': 'number',
+                                            'min': 5,
+                                            'hint': '最低按5个主种起删，辅种不计数',
+                                            'persistent-hint': True
+                                        }
+                                    }
+                                ]
+                            }
+                        ]
+                    },
+                    {
+                        'component': 'VRow',
+                        'content': [
+                            {
+                                'component': 'VCol',
+                                'props': {
+                                    'cols': 12,
+                                },
+                                'content': [
+                                    {
+                                        'component': 'VAlert',
+                                        'props': {
+                                            'type': 'warning',
+                                            'variant': 'tonal',
+                                            'text': '空间不足补充删种会复用下方筛选条件，按做种时间从长到短选择主种，并删除主种文件及同名同大小辅种。建议先开启“仅预览”核对结果。'
+                                        }
+                                    }
+                                ]
+                            }
+                        ]
+                    },
+                    {
+                        'component': 'VRow',
+                        'content': [
+                            {
+                                'component': 'VCol',
+                                'props': {
+                                    'cols': 12,
+                                    'md': 4
+                                },
+                                'content': [
+                                    {
+                                        'component': 'VSwitch',
+                                        'props': {
+                                            'model': 'regular_enabled',
+                                            'label': '执行常规处理',
+                                        }
+                                    }
+                                ]
+                            },
+                            {
+                                'component': 'VCol',
+                                'props': {
+                                    'cols': 12,
+                                    'md': 4
+                                },
+                                'content': [
+                                    {
+                                        'component': 'VSwitch',
+                                        'props': {
+                                            'model': 'supplement_enabled',
+                                            'label': '空间不足补充删种',
+                                        }
+                                    }
+                                ]
+                            },
+                            {
+                                'component': 'VCol',
+                                'props': {
+                                    'cols': 12,
+                                    'md': 4
+                                },
+                                'content': [
+                                    {
+                                        'component': 'VSwitch',
+                                        'props': {
+                                            'model': 'preview',
+                                            'label': '仅预览（不执行）',
                                         }
                                     }
                                 ]
@@ -568,6 +703,11 @@ class CustomTorrentRemover(_PluginBase):
         ], {
             "enabled": False,
             "notify": False,
+            "regular_enabled": True,
+            "preview": True,
+            "supplement_enabled": False,
+            "supplement_target_gb": "",
+            "supplement_min_count": 5,
             "onlyonce": False,
             "action": 'pause',
             'downloaders': [],
@@ -645,6 +785,18 @@ class CustomTorrentRemover(_PluginBase):
         return self.service_infos.get(name).config
 
     def delete_torrents(self):
+        """按配置执行常规处理和空间不足补充删种。"""
+        for downloader in self._downloaders:
+            try:
+                with lock:
+                    downloader_obj = self.__get_downloader(downloader)
+                    if self._regular_enabled:
+                        self.__run_regular_task(downloader, downloader_obj)
+                    if self._supplement_enabled:
+                        self.__run_supplement_task(downloader, downloader_obj)
+            except Exception as e: logger.error(f"自动删种任务异常：{str(e)}")
+
+    def __delete_torrents_legacy(self):
         """
         定时删除下载器中的下载任务
         """
@@ -708,6 +860,218 @@ class CustomTorrentRemover(_PluginBase):
             except Exception as e:
                 logger.error(f"自动删种任务异常：{str(e)}")
 
+    @staticmethod
+    def __torrent_text(torrent: dict) -> str:
+        return f"{torrent.get('name')} " \
+               f"来自站点：{torrent.get('site')} " \
+               f"大小：{StringUtils.str_filesize(torrent.get('size'))}"
+
+    def __run_regular_task(self, downloader: str, downloader_obj: Any) -> None:
+        """执行原有的常规暂停或删种流程。"""
+        torrents = self.get_remove_torrents(downloader)
+        logger.info(f"自动删种任务 获取符合常规处理条件种子数 {len(torrents)}")
+        action_names = {
+            "pause": "暂停种子",
+            "delete": "删除种子",
+            "deletefile": "删除种子及文件"
+        }
+        action_name = action_names.get(self._action)
+        if not action_name:
+            logger.warning(f"自动删种任务 未知动作：{self._action}")
+            return
+
+        message_lines = []
+        for torrent in torrents:
+            if self._event.is_set():
+                logger.info("自动删种服务停止")
+                return
+            text_item = self.__torrent_text(torrent)
+            if self._preview:
+                logger.info(f"自动删种任务 [仅预览] 将{action_name}：{text_item}")
+                message_lines.append(text_item)
+                continue
+            if self._action == "pause":
+                success = downloader_obj.stop_torrents(ids=[torrent.get("id")])
+            else:
+                success = downloader_obj.delete_torrents(
+                    delete_file=self._action == "deletefile",
+                    ids=[torrent.get("id")]
+                )
+            if success is False:
+                logger.error(f"自动删种任务 {action_name}失败：{text_item}")
+                continue
+            logger.info(f"自动删种任务 {action_name}：{text_item}")
+            message_lines.append(text_item)
+
+        if message_lines and self._notify:
+            mode = "预览" if self._preview else "完成"
+            self.post_message(
+                mtype=NotificationType.SiteMessage,
+                title=f"【自动删种任务{mode}】",
+                text=f"{downloader.title()} 常规流程计划{action_name}{len(message_lines)}个\n"
+                     + "\n".join(message_lines)
+            )
+
+    @staticmethod
+    def __get_value(data: Any, *keys: str) -> Any:
+        """兼容字典、qbittorrent-api 和 transmission-rpc 对象取值。"""
+        if data is None:
+            return None
+        for key in keys:
+            if isinstance(data, dict) and key in data:
+                return data.get(key)
+            getter = getattr(data, "get", None)
+            if callable(getter):
+                try:
+                    value = getter(key)
+                    if value is not None:
+                        return value
+                except Exception:
+                    pass
+            value = getattr(data, key, None)
+            if value is not None:
+                return value
+        return None
+
+    def __get_free_space(self, downloader_obj: Any, downloader_type: str) -> Optional[int]:
+        """读取下载器默认下载空间的可用字节数，读取失败时返回None。"""
+        if downloader_type == "qbittorrent":
+            transfer_info = downloader_obj.transfer_info()
+            free_space = self.__get_value(
+                transfer_info,
+                "free_space_on_disk",
+                "freeSpaceOnDisk"
+            )
+        else:
+            session = downloader_obj.get_session()
+            download_dir = self.__get_value(session, "download_dir", "download-dir", "downloadDir")
+            client = getattr(downloader_obj, "trc", None)
+            free_space_method = getattr(client, "free_space", None)
+            if not download_dir or not callable(free_space_method):
+                return None
+            free_space_result = free_space_method(download_dir)
+            if isinstance(free_space_result, (int, float)):
+                free_space = free_space_result
+            else:
+                free_space = self.__get_value(
+                    free_space_result,
+                    "size_bytes",
+                    "size-bytes",
+                    "sizeBytes",
+                    "free_space"
+                )
+        try:
+            return max(0, int(free_space)) if free_space is not None else None
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def select_supplement_groups(groups: List[dict], free_space: int,
+                                 target_space: int, min_count: int) -> List[dict]:
+        """按做种时长降序选组，至少选择min_count组并尽量达到目标空间。"""
+        min_count = max(5, int(min_count or 5))
+        selected = []
+        estimated_released = 0
+        sorted_groups = sorted(
+            groups,
+            key=lambda group: group.get("main", {}).get("seeding_time", 0),
+            reverse=True
+        )
+        for group in sorted_groups:
+            selected.append(group)
+            estimated_released += max(0, int(group.get("size") or 0))
+            if len(selected) >= min_count and free_space + estimated_released >= target_space:
+                break
+        return selected if len(selected) >= min_count else []
+
+    def __run_supplement_task(self, downloader: str, downloader_obj: Any) -> None:
+        """空间不足时删除最老的主种、文件及其辅种。"""
+        try:
+            target_gb = float(self._supplement_target_gb or 0)
+            min_count = max(5, int(self._supplement_min_count or 5))
+        except (TypeError, ValueError):
+            logger.error("补充删种配置无效：目标可用空间和最少主种数必须是数字")
+            return
+        if target_gb <= 0:
+            logger.warning("补充删种未设置有效的目标可用空间，跳过")
+            return
+
+        downloader_type = self.__get_downloader_config(downloader).type
+        free_space = self.__get_free_space(downloader_obj, downloader_type)
+        if free_space is None:
+            logger.error(f"补充删种 无法读取 {downloader} 默认下载目录可用空间，已安全跳过")
+            return
+
+        target_space = int(target_gb * 1024 * 1024 * 1024)
+        logger.info(
+            f"补充删种 {downloader} 当前可用空间 "
+            f"{StringUtils.str_filesize(free_space)}，目标 "
+            f"{StringUtils.str_filesize(target_space)}"
+        )
+        if free_space >= target_space:
+            logger.info(f"补充删种 {downloader} 空间充足，无需处理")
+            return
+
+        groups = self.get_supplement_torrent_groups(downloader)
+        selected = self.select_supplement_groups(groups, free_space, target_space, min_count)
+        if not selected:
+            logger.warning(
+                f"补充删种 {downloader} 符合限制条件的主种不足{min_count}个，已安全跳过"
+            )
+            return
+
+        estimated_released = sum(int(group.get("size") or 0) for group in selected)
+        companion_count = sum(len(group.get("companions") or []) for group in selected)
+        logger.info(
+            f"补充删种 {downloader} 选中主种{len(selected)}个、辅种{companion_count}个，"
+            f"预计释放 {StringUtils.str_filesize(estimated_released)}"
+        )
+
+        message_lines = []
+        for group in selected:
+            if self._event.is_set():
+                logger.info("自动删种服务停止")
+                return
+            main = group.get("main") or {}
+            companions = group.get("companions") or []
+            companion_ids = [item.get("id") for item in companions if item.get("id")]
+            text_item = self.__torrent_text(main)
+            if self._preview:
+                logger.info(
+                    f"补充删种 [仅预览] 将删除主种及文件：{text_item}，"
+                    f"关联辅种{len(companion_ids)}个"
+                )
+                message_lines.append(f"{text_item}；辅种{len(companion_ids)}个")
+                continue
+
+            if companion_ids:
+                companions_deleted = downloader_obj.delete_torrents(
+                    delete_file=False,
+                    ids=companion_ids
+                )
+                if companions_deleted is False:
+                    logger.error(f"补充删种 删除辅种失败，为保护数据跳过主种：{text_item}")
+                    continue
+            main_deleted = downloader_obj.delete_torrents(
+                delete_file=True,
+                ids=[main.get("id")]
+            )
+            if main_deleted is False:
+                logger.error(f"补充删种 删除主种及文件失败：{text_item}")
+                continue
+            logger.info(f"补充删种 删除主种及文件：{text_item}，辅种{len(companion_ids)}个")
+            message_lines.append(f"{text_item}；辅种{len(companion_ids)}个")
+
+        if message_lines and self._notify:
+            mode = "预览" if self._preview else "完成"
+            self.post_message(
+                mtype=NotificationType.SiteMessage,
+                title=f"【空间补充删种{mode}】",
+                text=f"{downloader.title()} 主种{len(message_lines)}个，预计释放"
+                     f"{StringUtils.str_filesize(estimated_released)}\n"
+                     + "\n".join(message_lines)
+            )
+
     def __get_qb_torrent(self, torrent: Any) -> Optional[dict]:
         """
         检查QB下载任务是否符合条件
@@ -747,7 +1111,8 @@ class CustomTorrentRemover(_PluginBase):
             "id": torrent.hash,
             "name": torrent.name,
             "site": StringUtils.get_url_sld(torrent.tracker),
-            "size": torrent.size
+            "size": torrent.size,
+            "seeding_time": torrent_seeding_time
         }
 
     def __get_tr_torrent(self, torrent: Any) -> Optional[dict]:
@@ -819,67 +1184,109 @@ class CustomTorrentRemover(_PluginBase):
             "id": torrent.hashString,
             "name": torrent.name,
             "site": torrent.trackers[0].get("sitename") if torrent.trackers else "",
+            "size": torrent.total_size,
+            "seeding_time": torrent_seeding_time
+        }
+
+    @staticmethod
+    def __torrent_group_key(torrent: dict) -> tuple:
+        """沿用官方辅种判定：名称和大小完全相同视为同数据。"""
+        return torrent.get("name"), torrent.get("size")
+
+    @staticmethod
+    def __torrent_to_item(torrent: Any, downloader_type: str) -> dict:
+        """将下载器原始种子转换为辅种匹配所需的统一结构。"""
+        if downloader_type == "qbittorrent":
+            return {
+                "id": torrent.hash,
+                "name": torrent.name,
+                "site": StringUtils.get_url_sld(torrent.tracker),
+                "size": torrent.size
+            }
+        return {
+            "id": torrent.hashString,
+            "name": torrent.name,
+            "site": torrent.trackers[0].get("sitename") if torrent.trackers else "",
             "size": torrent.total_size
         }
+
+    def __get_filtered_context(self, downloader: str) -> Tuple[List[dict], List[dict]]:
+        """返回通过现有限制条件的候选和下载器全部相关种子。"""
+        downloader_obj = self.__get_downloader(downloader)
+        downloader_type = self.__get_downloader_config(downloader).type
+        tags = [tag.strip() for tag in self._labels.split(",") if tag.strip()] if self._labels else []
+        if self._mponly:
+            tags.append(settings.TORRENT_TAG)
+        torrents, error_flag = downloader_obj.get_torrents(tags=tags or None)
+        if error_flag:
+            logger.error(f"自动删种任务 获取 {downloader} 种子列表失败")
+            return [], []
+
+        # 标签只用于限制主种候选；辅种需从下载器全部任务中识别。
+        all_torrents = torrents
+        if tags:
+            all_torrents, all_error_flag = downloader_obj.get_torrents(tags=None)
+            if all_error_flag:
+                logger.error(f"自动删种任务 获取 {downloader} 全部种子失败")
+                return [], []
+
+        candidates = []
+        all_items = [
+            self.__torrent_to_item(torrent, downloader_type)
+            for torrent in all_torrents
+        ]
+        for torrent in torrents:
+            if downloader_type == "qbittorrent":
+                candidate = self.__get_qb_torrent(torrent)
+            else:
+                candidate = self.__get_tr_torrent(torrent)
+            if candidate:
+                candidates.append(candidate)
+        return candidates, all_items
+
+    def get_supplement_torrent_groups(self, downloader: str) -> List[dict]:
+        """按同名同大小数据分组，组内最老候选为主种，其余均为辅种。"""
+        candidates, all_items = self.__get_filtered_context(downloader)
+        all_by_group = {}
+        for item in all_items:
+            all_by_group.setdefault(self.__torrent_group_key(item), []).append(item)
+
+        groups = []
+        seen_groups = set()
+        for candidate in sorted(
+                candidates,
+                key=lambda item: item.get("seeding_time", 0),
+                reverse=True):
+            group_key = self.__torrent_group_key(candidate)
+            if group_key in seen_groups:
+                continue
+            seen_groups.add(group_key)
+            companions = [
+                item for item in all_by_group.get(group_key, [])
+                if item.get("id") != candidate.get("id")
+            ]
+            groups.append({
+                "main": candidate,
+                "companions": companions,
+                "size": candidate.get("size") or 0
+            })
+        return groups
 
     def get_remove_torrents(self, downloader: str):
         """
         获取自动删种任务种子
         """
-        remove_torrents = []
-        # 下载器对象
-        downloader_obj = self.__get_downloader(downloader)
-        downloader_config = self.__get_downloader_config(downloader)
-        # 标题
-        if self._labels:
-            tags = self._labels.split(',')
-        else:
-            tags = []
-        if self._mponly:
-            tags.append(settings.TORRENT_TAG)
-        # 查询种子
-        torrents, error_flag = downloader_obj.get_torrents(tags=tags or None)
-        if error_flag:
-            return []
-        # 处理种子
-        for torrent in torrents:
-            if downloader_config.type == "qbittorrent":
-                item = self.__get_qb_torrent(torrent)
-            else:
-                item = self.__get_tr_torrent(torrent)
-            if not item:
-                continue
-            remove_torrents.append(item)
+        remove_torrents, all_items = self.__get_filtered_context(downloader)
         # 处理辅种
         if self._samedata and remove_torrents:
-            remove_ids = [t.get("id") for t in remove_torrents]
+            remove_ids = {t.get("id") for t in remove_torrents}
             remove_torrents_plus = []
-            for remove_torrent in remove_torrents:
-                name = remove_torrent.get("name")
-                size = remove_torrent.get("size")
-                for torrent in torrents:
-                    if downloader_config.type == "qbittorrent":
-                        plus_id = torrent.hash
-                        plus_name = torrent.name
-                        plus_size = torrent.size
-                        plus_site = StringUtils.get_url_sld(torrent.tracker)
-                    else:
-                        plus_id = torrent.hashString
-                        plus_name = torrent.name
-                        plus_size = torrent.total_size
-                        plus_site = torrent.trackers[0].get("sitename") if torrent.trackers else ""
-                    # 比对名称和大小
-                    if plus_name == name \
-                            and plus_size == size \
-                            and plus_id not in remove_ids:
-                        remove_torrents_plus.append(
-                            {
-                                "id": plus_id,
-                                "name": plus_name,
-                                "site": plus_site,
-                                "size": plus_size
-                            }
-                        )
+            remove_group_keys = {self.__torrent_group_key(item) for item in remove_torrents}
+            for item in all_items:
+                if self.__torrent_group_key(item) in remove_group_keys \
+                        and item.get("id") not in remove_ids:
+                    remove_torrents_plus.append(item)
+                    remove_ids.add(item.get("id"))
             if remove_torrents_plus:
                 remove_torrents.extend(remove_torrents_plus)
         return remove_torrents
