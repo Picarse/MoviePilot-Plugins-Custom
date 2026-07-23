@@ -19,7 +19,7 @@ class CustomSiteRefresh(_PluginBase):
     plugin_name = "站点自动更新（自用版）"
     plugin_desc = "使用浏览器模拟登录站点获取Cookie和UA。"
     plugin_icon = "Chrome_A.png"
-    plugin_version = "1.5.0"
+    plugin_version = "1.5.1"
     plugin_author = "thsrite, Picarse"
     author_url = "https://github.com/thsrite"
     plugin_config_prefix = "customsiterefresh_"
@@ -149,6 +149,11 @@ class CustomSiteRefresh(_PluginBase):
             "endpoint": self.test_connectivity,
             "methods": ["POST"],
             "summary": "匿名测试站点网络连通性",
+        }, {
+            "path": "/login-page-check",
+            "endpoint": self.check_login_page,
+            "methods": ["POST"],
+            "summary": "检查登录页是否可由浏览器加载",
         }]
 
     def test_site(self, payload: Dict[str, Any], apikey: str) -> schemas.Response:
@@ -239,6 +244,70 @@ class CustomSiteRefresh(_PluginBase):
 
         self._connectivity_results[site_id] = (state, message)
         return schemas.Response(success=state, message=message)
+
+    def check_login_page(self, payload: Dict[str, Any], apikey: str) -> schemas.Response:
+        """Load one site in a disposable direct browser session without credentials."""
+        if apikey != settings.API_TOKEN:
+            return schemas.Response(success=False, message="API密钥错误")
+        site_id = payload.get("site_id") if isinstance(payload, dict) else None
+        try:
+            site_id = int(site_id)
+        except (TypeError, ValueError):
+            return schemas.Response(success=False, message="未获取到有效的站点ID")
+        site = SiteOper().get(site_id)
+        if not site:
+            return schemas.Response(success=False, message=f"站点ID {site_id} 不存在")
+
+        from app.helper.browser import BrowserSessionHelper
+
+        helper = BrowserSessionHelper(headless=True)
+        session_key = f"custom-site-refresh-check-{site_id}-{time.monotonic_ns()}"
+        started_at = time.monotonic()
+        try:
+            def inspect(session):
+                page = session.active_page
+                response = helper.goto(page, site.url, timeout=8)
+                snapshot = BrowserSessionHelper.build_snapshot(
+                    page, status=getattr(response, "status", None), max_text_chars=1000
+                )
+                elements = snapshot.get("interactive_elements") or []
+                input_types = sorted({
+                    str(element.get("type") or "").lower()
+                    for element in elements if element.get("type")
+                })
+                return {
+                    "url": snapshot.get("url"),
+                    "title": snapshot.get("title"),
+                    "status": snapshot.get("status"),
+                    "input_types": input_types,
+                    "has_password": "password" in input_types,
+                }
+
+            result = helper.with_session(
+                session_key=session_key,
+                callback=inspect,
+                timeout=8,
+            )
+            elapsed = time.monotonic() - started_at
+            title = str(result.get("title") or "")
+            has_password = bool(result.get("has_password"))
+            state = has_password
+            message = (
+                f"登录页检查完成（直连，耗时 {elapsed:.1f} 秒，"
+                f"标题 {title[:80] or '无'}，密码框 {'存在' if has_password else '不存在'}）"
+            )
+            return schemas.Response(success=state, message=message, data=result)
+        except Exception as error:
+            elapsed = time.monotonic() - started_at
+            return schemas.Response(
+                success=False,
+                message=(
+                    f"登录页检查失败（直连，耗时 {elapsed:.1f} 秒，"
+                    f"错误类型 {type(error).__name__}）"
+                ),
+            )
+        finally:
+            BrowserSessionHelper.close_session(session_key)
 
     def get_form(self) -> Tuple[List[dict], Dict[str, Any]]:
         return [{
