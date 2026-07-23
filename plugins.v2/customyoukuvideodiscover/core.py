@@ -54,6 +54,14 @@ GENRE_OPTIONS = {
     ),
 }
 
+SECTION_OPTIONS = (
+    ("banner", "轮播精选"),
+    ("hot", "热播推荐"),
+    ("upcoming", "即将上线"),
+    ("ranking", "热度榜单"),
+    ("feed", "更多推荐"),
+)
+
 INITIAL_DATA_MARKER = "window.__INITIAL_DATA__ ="
 DEFAULT_POSTER = (
     "https://img.alicdn.com/imgextra/i2/"
@@ -93,7 +101,7 @@ def parse_initial_data(html: Any) -> Dict[str, Any]:
     return payload if isinstance(payload, dict) else {}
 
 
-def _component_items(module: Any) -> Iterable[Dict[str, Any]]:
+def _component_items(module: Any) -> Iterable[tuple]:
     if not isinstance(module, dict):
         return
     for component in module.get("components") or []:
@@ -101,9 +109,29 @@ def _component_items(module: Any) -> Iterable[Dict[str, Any]]:
             continue
         if "SHORT_VIDEO" in str(component.get("typeName") or ""):
             continue
+        component_data = (
+            component.get("data") if isinstance(component.get("data"), dict) else {}
+        )
+        module_title = str(
+            component.get("title") or component_data.get("title") or ""
+        ).strip()
+        type_name = str(component.get("typeName") or module.get("typeName") or "")
         for item in component.get("itemList") or []:
             if isinstance(item, dict):
-                yield item
+                yield item, type_name, module_title
+
+
+def _section(type_name: str, title: str = "") -> str:
+    value = f"{type_name} {title}".upper()
+    if "LUNBO" in value or "SWIPER" in value:
+        return "banner"
+    if "BILLBOARD" in value or "榜" in title:
+        return "ranking"
+    if "RESERVE" in value or "即将" in title:
+        return "upcoming"
+    if "V_SCROLL" in value and "FEED" not in value:
+        return "hot"
+    return "feed"
 
 
 def normalize_poster_url(value: Any) -> str:
@@ -162,7 +190,11 @@ def _tag_values(item: Dict[str, Any]) -> tuple:
     return tuple(dict.fromkeys(tags)), tuple(dict.fromkeys(genres))
 
 
-def _media_item(item: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+def _media_item(
+    item: Dict[str, Any],
+    section: str = "feed",
+    module_title: str = "",
+) -> Optional[Dict[str, Any]]:
     if item.get("isYkAd") or item.get("ad_flag") or item.get("rawAdData"):
         return None
     action = item.get("action") if isinstance(item.get("action"), dict) else {}
@@ -183,6 +215,8 @@ def _media_item(item: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         "poster": normalize_poster_url(item.get("img") or item.get("hImg")),
         "tags": tags,
         "genres": genres,
+        "section": section,
+        "module_title": module_title,
     }
 
 
@@ -196,8 +230,12 @@ def extract_media_items(payload: Any) -> List[Dict[str, Any]]:
     results = []
     seen = set()
     for module in modules:
-        for item in _component_items(module):
-            media = _media_item(item)
+        for item, type_name, module_title in _component_items(module):
+            media = _media_item(
+                item,
+                section=_section(type_name, module_title),
+                module_title=module_title,
+            )
             if not media or media["media_id"] in seen:
                 continue
             seen.add(media["media_id"])
@@ -207,43 +245,75 @@ def extract_media_items(payload: Any) -> List[Dict[str, Any]]:
 
 def extract_feed_state(payload: Any) -> Dict[str, Any]:
     if not isinstance(payload, dict):
-        return {"items": [], "session": {}}
+        return {
+            "items": [], "session": {}, "more": False,
+            "feed_page": 1, "page_num_max": 1,
+        }
     page_map = payload.get("pageMap")
     page_map = page_map if isinstance(page_map, dict) else {}
     session = page_map.get("feedSession")
     return {
         "items": extract_media_items(payload),
         "session": session if isinstance(session, dict) else {},
+        "more": bool(page_map.get("feedHasMore")),
+        "feed_page": clamp_positive_int(page_map.get("feedPageNo"), 1, 1000),
+        "page_num_max": clamp_positive_int(page_map.get("pageNumMax"), 1, 1000),
+    }
+
+
+def extract_mtop_state(payload: Any, code: str) -> Dict[str, Any]:
+    """Extract cards and the continuation cursor from a Columbus response."""
+    empty = {"items": [], "session": {}, "more": False}
+    if not isinstance(payload, dict):
+        return empty
+    data = payload.get("data")
+    block = data.get(code) if isinstance(data, dict) else None
+    if not isinstance(block, dict) or block.get("success") is not True:
+        return empty
+    results = []
+    seen = set()
+
+    def visit(value: Any, section: str = "feed", module_title: str = ""):
+        if isinstance(value, dict):
+            node_data = value.get("data")
+            node_data = node_data if isinstance(node_data, dict) else {}
+            children = value.get("nodes") or []
+            type_name = str(value.get("typeName") or "")
+            next_title = module_title
+            if children:
+                next_title = str(node_data.get("title") or module_title or "").strip()
+            next_section = _section(type_name, next_title) if children else section
+            if isinstance(node_data, dict):
+                media = _media_item(
+                    node_data,
+                    section=section,
+                    module_title=module_title,
+                )
+                if media and media["media_id"] not in seen:
+                    seen.add(media["media_id"])
+                    results.append(media)
+            for child in children:
+                visit(child, next_section, next_title)
+        elif isinstance(value, list):
+            for child in value:
+                visit(child, section, module_title)
+
+    root = block.get("data")
+    visit(root)
+    root = root if isinstance(root, dict) else {}
+    root_data = root.get("data")
+    root_data = root_data if isinstance(root_data, dict) else {}
+    session = root_data.get("session")
+    return {
+        "items": results,
+        "session": session if isinstance(session, dict) else {},
+        "more": bool(root.get("more")),
     }
 
 
 def extract_mtop_items(payload: Any, code: str) -> List[Dict[str, Any]]:
-    """Extract cards recursively from an untransformed Columbus response."""
-    if not isinstance(payload, dict):
-        return []
-    data = payload.get("data")
-    block = data.get(code) if isinstance(data, dict) else None
-    if not isinstance(block, dict) or block.get("success") is not True:
-        return []
-    results = []
-    seen = set()
-
-    def visit(value: Any):
-        if isinstance(value, dict):
-            node_data = value.get("data")
-            if isinstance(node_data, dict):
-                media = _media_item(node_data)
-                if media and media["media_id"] not in seen:
-                    seen.add(media["media_id"])
-                    results.append(media)
-            for child in value.get("nodes") or []:
-                visit(child)
-        elif isinstance(value, list):
-            for child in value:
-                visit(child)
-
-    visit(block.get("data"))
-    return results
+    """Compatibility wrapper returning only cards from a Columbus response."""
+    return extract_mtop_state(payload, code)["items"]
 
 
 def filter_media_items(
@@ -251,6 +321,7 @@ def filter_media_items(
     genre: Optional[str] = None,
     access: Optional[str] = None,
     progress: Optional[str] = None,
+    section: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     results = []
     access_tag = {
@@ -262,6 +333,8 @@ def filter_media_items(
         tags = tuple(item.get("tags") or ())
         genres = tuple(item.get("genres") or ())
         if genre and genre not in genres:
+            continue
+        if section and item.get("section") != section:
             continue
         if access_tag and access_tag not in tags:
             continue

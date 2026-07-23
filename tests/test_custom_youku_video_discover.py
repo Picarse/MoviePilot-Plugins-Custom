@@ -111,15 +111,25 @@ class CustomYoukuVideoCoreTest(unittest.TestCase):
             "data": {
                 "2019061000": {
                     "success": True,
-                    "data": {"nodes": [{"nodes": [{"data": card}]}]},
+                    "data": {"nodes": [{
+                        "typeName": "KU_FLIX_FEED_BILLBOARD_COMPONENT",
+                        "data": {"title": "电影热度榜"},
+                        "nodes": [{"data": card}],
+                    }]},
                 }
             }
         }
         items = CORE.extract_mtop_items(payload, "2019061000")
         self.assertEqual([item["media_id"] for item in items], ["feed-1"])
+        self.assertEqual(items[0]["section"], "ranking")
+        self.assertEqual(items[0]["module_title"], "电影热度榜")
         self.assertEqual(
             CORE.filter_media_items(
-                items, genre="冒险", access="vip", progress="complete"
+                items,
+                genre="冒险",
+                access="vip",
+                progress="complete",
+                section="ranking",
             ),
             items,
         )
@@ -218,7 +228,7 @@ class CustomYoukuVideoPluginTest(unittest.TestCase):
         self.plugin._enabled = True
 
     def test_plugin_identity_and_discover_source_are_independent(self):
-        self.assertEqual(self.plugin.plugin_version, "1.1.0")
+        self.assertEqual(self.plugin.plugin_version, "1.2.0")
         self.assertEqual(
             self.plugin.plugin_config_prefix,
             "customyoukuvideodiscover_",
@@ -282,7 +292,7 @@ class CustomYoukuVideoPluginTest(unittest.TestCase):
             self.module.REQUEST_TIMEOUT,
         )
 
-    def test_endpoint_uses_signed_mtop_after_ssr_catalog(self):
+    def test_endpoint_aggregates_prefetched_mtop_catalog(self):
         self.plugin._request_channel = Mock(return_value={
             "items": [{
                 "title": "首屏",
@@ -293,8 +303,11 @@ class CustomYoukuVideoPluginTest(unittest.TestCase):
                 "genres": (),
             }],
             "session": {"subIndex": 7},
+            "more": True,
+            "feed_page": 1,
+            "page_num_max": 60,
         })
-        self.plugin._request_feed = Mock(return_value=[{
+        self.plugin._request_feed_pages = Mock(return_value=[{
             "title": "分页",
             "year": None,
             "media_id": "feed-1",
@@ -303,10 +316,14 @@ class CustomYoukuVideoPluginTest(unittest.TestCase):
             "genres": ("动作", "冒险"),
         }])
         results = self.plugin.youkuvideo_discover(
-            mtype="movie", page=2, count=1, genre="冒险", access="vip"
+            mtype="movie", page=1, count=1, genre="冒险", access="vip"
         )
         self.assertEqual([result.media_id for result in results], ["feed-1"])
-        self.assertEqual(self.plugin._request_feed.call_args.args[1], 2)
+        self.assertEqual(self.plugin._request_feed_pages.call_args.args[1], 2)
+        self.assertEqual(
+            self.plugin._request_feed_pages.call_args.args[2],
+            self.module.DEFAULT_PREFETCH_PAGES,
+        )
 
     def test_fetch_feed_bootstraps_token_and_retries_with_signature(self):
         first = Mock()
@@ -339,6 +356,54 @@ class CustomYoukuVideoPluginTest(unittest.TestCase):
         first_sign = client.get.call_args_list[0].kwargs["params"]["sign"]
         second_sign = client.get.call_args_list[1].kwargs["params"]["sign"]
         self.assertNotEqual(first_sign, second_sign)
+
+    def test_fetch_feed_pages_carries_forward_server_session(self):
+        bootstrap = Mock()
+        bootstrap.raise_for_status.return_value = None
+        bootstrap.json.return_value = {"ret": ["FAIL_SYS_TOKEN_EMPTY"]}
+
+        def page_response(media_id, next_index, more):
+            response = Mock()
+            response.raise_for_status.return_value = None
+            response.json.return_value = {
+                "data": {
+                    "2019061000": {
+                        "success": True,
+                        "data": {
+                            "more": more,
+                            "data": {"session": {"subIndex": next_index}},
+                            "nodes": [{"nodes": [{"data": {
+                                "title": media_id,
+                                "img": "https://m.ykimg.com/feed.jpg",
+                                "action": {
+                                    "type": "JUMP_TO_SHOW",
+                                    "value": media_id,
+                                },
+                            }}]}],
+                        },
+                    }
+                }
+            }
+            return response
+
+        client = Mock()
+        client.cookies = [types.SimpleNamespace(name="_m_h5_tk", value="token_expiry")]
+        client.get.side_effect = [
+            bootstrap,
+            page_response("page-2", 8, True),
+            page_response("page-3", 9, False),
+        ]
+        self.requests.Session.return_value = client
+        results = self.plugin._fetch_feed_pages(
+            "movie", 2, 4, '{"subIndex":7}'
+        )
+        self.assertEqual(
+            [item["media_id"] for item in results], ["page-2", "page-3"]
+        )
+        third_query = client.get.call_args_list[2].kwargs["params"]
+        outer = __import__("json").loads(third_query["data"])
+        inner = __import__("json").loads(outer["params"])
+        self.assertEqual(__import__("json").loads(inner["session"])["subIndex"], 8)
 
     def test_init_registers_youku_image_domains(self):
         self.config.settings.SECURITY_IMAGE_DOMAINS.clear()
