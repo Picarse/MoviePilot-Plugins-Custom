@@ -31,5 +31,17 @@
       "v1.3.0": "修复域名误匹配，增加防重复、失败原因、2FA说明和手动测试",
       "v1.2.0": "基于官方 SiteRefresh v1.2 创建独立自用版本"
     }
+  },
+  "CustomTencentVideoDiscover": {
+    "name": "腾讯视频探索（自用版）",
+    "description": "让探索支持腾讯视频的数据浏览。",
+    "labels": "探索",
+    "version": "1.0.0",
+    "icon": "https://raw.githubusercontent.com/DDSRem-Dev/MoviePilot-Plugins/main/icons/tencentvideo_A.png",
+    "author": "DDSRem, Picarse",
+    "level": 1,
+    "history": {
+      "v1.0.0": "基于 DDSRem TencentVideoDiscover v1.0.3 创建独立自用版本"
+    }
   }
 }

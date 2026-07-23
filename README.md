@@ -28,6 +28,16 @@
 自用版采用独立插件 ID 和配置前缀，可与官方版同时安装，方便后续单独检查和修改。
 请勿同时启用官方版和自用版站点自动更新插件，否则两者都会响应自动签到事件。
 
+## 腾讯视频探索（自用版）
+
+- 插件 ID：`CustomTencentVideoDiscover`
+- 源码基础：[DDSRem-Dev/MoviePilot-Plugins](https://github.com/DDSRem-Dev/MoviePilot-Plugins) 的 `TencentVideoDiscover` v1.0.3
+- 功能：向 MoviePilot“探索”注册腾讯视频数据源，支持电视剧、电影、综艺、动漫、少儿和纪录片分类及动态筛选项
+- 可靠性：请求超时保护、频道和分页校验、筛选接口失败降级、启用后才加载腾讯筛选项
+- 独立性：使用独立插件 ID、配置前缀、API 路径、缓存区域和媒体 ID 前缀
+
+自用版可以与上游插件同时安装，但不建议同时启用，否则探索页会出现两套腾讯视频入口。
+
 ## 添加插件库
 
 在 MoviePilot V2 的插件市场设置中添加以下仓库：
@@ -36,7 +46,7 @@
 https://github.com/Picarse/MoviePilot-Plugins-Custom
 ```
 
-刷新插件市场后，搜索“自动删种（自用版）”或“站点自动更新（自用版）”。
+刷新插件市场后，可搜索“自动删种（自用版）”“站点自动更新（自用版）”或“腾讯视频探索（自用版）”。
 
 ## 安全测试建议
 
@@ -51,4 +61,4 @@ https://github.com/Picarse/MoviePilot-Plugins-Custom
 
 ## 来源与许可
 
-本仓库插件基于 [jxxghp/MoviePilot-Plugins](https://github.com/jxxghp/MoviePilot-Plugins) 中对应的官方插件修改，保留原作者信息，并按照 GNU GPL v3 许可证发布。详见 [LICENSE](LICENSE)。
+本仓库插件基于 [jxxghp/MoviePilot-Plugins](https://github.com/jxxghp/MoviePilot-Plugins) 和 [DDSRem-Dev/MoviePilot-Plugins](https://github.com/DDSRem-Dev/MoviePilot-Plugins) 中对应插件修改，保留原作者信息，并按照 GNU GPL v3 许可证发布。详见 [LICENSE](LICENSE)。
