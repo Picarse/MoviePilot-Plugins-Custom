@@ -19,7 +19,7 @@ class CustomSiteRefresh(_PluginBase):
     plugin_name = "站点自动更新（自用版）"
     plugin_desc = "使用浏览器模拟登录站点获取Cookie和UA。"
     plugin_icon = "Chrome_A.png"
-    plugin_version = "1.5.1"
+    plugin_version = "1.5.2"
     plugin_author = "thsrite, Picarse"
     author_url = "https://github.com/thsrite"
     plugin_config_prefix = "customsiterefresh_"
@@ -260,7 +260,7 @@ class CustomSiteRefresh(_PluginBase):
 
         from app.helper.browser import BrowserSessionHelper
 
-        helper = BrowserSessionHelper(headless=True)
+        helper = BrowserSessionHelper(headless=False)
         session_key = f"custom-site-refresh-check-{site_id}-{time.monotonic_ns()}"
         started_at = time.monotonic()
         try:
