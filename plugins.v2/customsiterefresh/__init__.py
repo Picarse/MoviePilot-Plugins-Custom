@@ -1,5 +1,6 @@
 import time
 from threading import Lock
+from types import FunctionType
 from typing import Any, Dict, List, Tuple
 
 from app import schemas
@@ -19,7 +20,7 @@ class CustomSiteRefresh(_PluginBase):
     plugin_name = "站点自动更新（自用版）"
     plugin_desc = "使用浏览器模拟登录站点获取Cookie和UA。"
     plugin_icon = "Chrome_A.png"
-    plugin_version = "1.5.2"
+    plugin_version = "1.6.0"
     plugin_author = "thsrite, Picarse"
     author_url = "https://github.com/thsrite"
     plugin_config_prefix = "customsiterefresh_"
@@ -37,6 +38,117 @@ class CustomSiteRefresh(_PluginBase):
     _connectivity_results: Dict[int, Tuple[bool, str]] = {}
     _locks_guard = Lock()
     _cooldown_seconds = 60
+
+    @staticmethod
+    def _cloudflare_bootstrap(site) -> Tuple[str, str]:
+        """Return only Cloudflare clearance cookies and their matching stored UA."""
+        cookie = str(getattr(site, "cookie", "") or "")
+        values = []
+        for item in cookie.split(";"):
+            name, separator, value = item.strip().partition("=")
+            if separator and name.lower() in {"cf_clearance", "__cf_bm"}:
+                values.append(f"{name}={value}")
+        clearance = "; ".join(values)
+        ua = str(getattr(site, "ua", "") or "")
+        return (clearance, ua) if clearance and ua else ("", "")
+
+    @staticmethod
+    def _update_cookie_with_clearance(
+        site, site_config: Dict[str, str], clearance: str, ua: str
+    ) -> Tuple[bool, str]:
+        """Run CookieHelper with an isolated, Cloudflare-aware browser adapter."""
+        from app.helper.browser import PlaywrightHelper
+        from app.helper.cookie import CookieHelper
+
+        class TolerantPage:
+            def __init__(self, page):
+                self._page = page
+
+            def __getattr__(self, name):
+                return getattr(self._page, name)
+
+            def wait_for_load_state(self, state, *args, **kwargs):
+                try:
+                    return self._page.wait_for_load_state(state, *args, **kwargs)
+                except Exception:
+                    if state == "networkidle":
+                        return None
+                    raise
+
+        class ClearancePlaywrightHelper(PlaywrightHelper):
+            def action(
+                self,
+                url,
+                callback,
+                cookies=None,
+                ua=None,
+                proxies=None,
+                headless=False,
+                timeout=60,
+            ):
+                from cloakbrowser import launch_context
+
+                context = None
+                page = None
+                try:
+                    context = launch_context(
+                        headless=headless,
+                        proxy=proxies,
+                        user_agent=ua or site.ua,
+                        humanize=settings.CLOAKBROWSER_HUMANIZE,
+                        human_preset=settings.CLOAKBROWSER_HUMAN_PRESET,
+                    )
+                    page = context.new_page()
+                    page.set_extra_http_headers({"cookie": cookies or clearance})
+                    page.goto(
+                        url,
+                        wait_until="domcontentloaded",
+                        timeout=int(timeout or 60) * 1000,
+                    )
+
+                    deadline = time.monotonic() + min(max(int(timeout or 60), 1), 30)
+                    while True:
+                        title = str(page.title() or "").lower()
+                        if "just a moment" not in title:
+                            break
+                        if time.monotonic() >= deadline:
+                            return None, None, "Cloudflare挑战未通过，未提交账号密码"
+                        time.sleep(0.5)
+                    return callback(TolerantPage(page))
+                except Exception as error:
+                    return None, None, f"Cloudflare兼容登录异常：{type(error).__name__}"
+                finally:
+                    if page:
+                        page.close()
+                    if context:
+                        context.close()
+
+        original = CookieHelper.get_site_cookie_ua
+        isolated_globals = original.__globals__.copy()
+        isolated_globals["PlaywrightHelper"] = ClearancePlaywrightHelper
+        isolated_method = FunctionType(
+            original.__code__,
+            isolated_globals,
+            original.__name__,
+            original.__defaults__,
+            original.__closure__,
+        )
+        result = isolated_method(
+            CookieHelper(),
+            url=site.url,
+            username=site_config["username"],
+            password=site_config["password"],
+            two_step_code=site_config["two_step_code"],
+            proxies=settings.PROXY_SERVER if site.proxy else None,
+            timeout=site.timeout or 60,
+        )
+        if not result:
+            return False, "Cloudflare兼容登录未返回结果"
+        cookie, new_ua, message = result
+        if not cookie:
+            return False, message or "Cloudflare兼容登录失败"
+        SiteOper().update(site.id, {"cookie": cookie, "ua": new_ua})
+        return True, message or "更新成功"
 
     def init_plugin(self, config: dict = None):
         config = config or {}
@@ -109,12 +221,19 @@ class CustomSiteRefresh(_PluginBase):
 
             logger.info(f"由{source}触发，开始登录站点 {site.name} 更新Cookie和UA")
             try:
-                state, message = SiteChain().update_cookie(
-                    site_info=site,
-                    username=site_config["username"],
-                    password=site_config["password"],
-                    two_step_code=site_config["two_step_code"],
-                )
+                clearance, clearance_ua = self._cloudflare_bootstrap(site)
+                if clearance:
+                    logger.info(f"站点 {site.name} 检测到Cloudflare clearance，使用兼容登录")
+                    state, message = self._update_cookie_with_clearance(
+                        site, site_config, clearance, clearance_ua
+                    )
+                else:
+                    state, message = SiteChain().update_cookie(
+                        site_info=site,
+                        username=site_config["username"],
+                        password=site_config["password"],
+                        two_step_code=site_config["two_step_code"],
+                    )
             except Exception as error:
                 state, message = False, f"调用浏览器登录失败：{error}"
 
@@ -260,6 +379,7 @@ class CustomSiteRefresh(_PluginBase):
 
         from app.helper.browser import BrowserSessionHelper
 
+        clearance, clearance_ua = self._cloudflare_bootstrap(site)
         helper = BrowserSessionHelper(headless=False)
         session_key = f"custom-site-refresh-check-{site_id}-{time.monotonic_ns()}"
         started_at = time.monotonic()
@@ -286,6 +406,8 @@ class CustomSiteRefresh(_PluginBase):
             result = helper.with_session(
                 session_key=session_key,
                 callback=inspect,
+                user_agent=clearance_ua or None,
+                cookies=clearance or None,
                 timeout=8,
             )
             elapsed = time.monotonic() - started_at
