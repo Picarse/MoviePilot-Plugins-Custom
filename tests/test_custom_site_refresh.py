@@ -39,7 +39,10 @@ def load_plugin_module():
     chain_site.SiteChain = SiteChain
 
     core_config = types.ModuleType("app.core.config")
-    core_config.settings = types.SimpleNamespace(API_TOKEN="test-token")
+    core_config.settings = types.SimpleNamespace(
+        API_TOKEN="test-token",
+        PROXY_SERVER={"server": "http://proxy.test:8080"},
+    )
     core_event = types.ModuleType("app.core.event")
     core_event.eventmanager = types.SimpleNamespace(
         register=lambda _event_type: lambda function: function
@@ -57,6 +60,13 @@ def load_plugin_module():
             return list(self.sites.values())
 
     db_site_oper.SiteOper = SiteOper
+
+    helper_browser = types.ModuleType("app.helper.browser")
+
+    class PlaywrightHelper:
+        get_page_source = Mock(return_value="<html>reachable</html>")
+
+    helper_browser.PlaywrightHelper = PlaywrightHelper
 
     app_log = types.ModuleType("app.log")
     app_log.logger = types.SimpleNamespace(
@@ -85,6 +95,8 @@ def load_plugin_module():
         "app.core.event": core_event,
         "app.db": types.ModuleType("app.db"),
         "app.db.site_oper": db_site_oper,
+        "app.helper": types.ModuleType("app.helper"),
+        "app.helper.browser": helper_browser,
         "app.log": app_log,
         "app.plugins": app_plugins,
         "app.schemas.types": schema_types,
@@ -101,7 +113,7 @@ def load_plugin_module():
     module = importlib.util.module_from_spec(spec)
     sys.modules[module_name] = module
     spec.loader.exec_module(module)
-    return module, SiteOper, SiteChain
+    return module, SiteOper, SiteChain, PlaywrightHelper
 
 
 class CustomSiteRefreshCoreTest(unittest.TestCase):
@@ -153,19 +165,24 @@ class CustomSiteRefreshCoreTest(unittest.TestCase):
 class CustomSiteRefreshFlowTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.module, cls.site_oper, cls.site_chain = load_plugin_module()
+        cls.module, cls.site_oper, cls.site_chain, cls.playwright = load_plugin_module()
 
     def setUp(self):
         self.module.CustomSiteRefresh._site_locks.clear()
         self.module.CustomSiteRefresh._last_attempts.clear()
         self.module.CustomSiteRefresh._test_results.clear()
+        self.module.CustomSiteRefresh._connectivity_results.clear()
         self.site_chain.update_cookie.reset_mock()
         self.site_chain.update_cookie.return_value = (True, "")
+        self.playwright.get_page_source.reset_mock()
+        self.playwright.get_page_source.return_value = "<html>reachable</html>"
         self.site_oper.sites = {
             1: types.SimpleNamespace(
                 id=1,
                 name="ExamplePT",
                 url="https://pt.example.com/login",
+                proxy=False,
+                timeout=15,
             )
         }
         self.plugin = self.module.CustomSiteRefresh()
@@ -219,6 +236,51 @@ class CustomSiteRefreshFlowTest(unittest.TestCase):
         self.assertTrue(allowed.success)
         self.assertIn(1, self.plugin._test_results)
         self.site_chain.update_cookie.assert_called_once()
+
+    def test_connectivity_uses_same_browser_route_without_logging_in(self):
+        self.plugin.init_plugin({
+            "enabled": False,
+            "siteconf": "example.com|alice|secret",
+        })
+        response = self.plugin.test_connectivity({"site_id": 1}, "test-token")
+        self.assertTrue(response.success)
+        self.assertIn("直连", response.message)
+        self.playwright.get_page_source.assert_called_once_with(
+            url="https://pt.example.com/login",
+            proxies=None,
+            timeout=15,
+        )
+        self.site_chain.update_cookie.assert_not_called()
+
+    def test_connectivity_honors_site_proxy_and_reports_failure(self):
+        self.site_oper.sites[1].proxy = True
+        self.playwright.get_page_source.return_value = None
+        response = self.plugin.test_connectivity({"site_id": 1}, "test-token")
+        self.assertFalse(response.success)
+        self.assertIn("站点代理", response.message)
+        self.assertIn("15 秒", response.message)
+        self.playwright.get_page_source.assert_called_once_with(
+            url="https://pt.example.com/login",
+            proxies={"server": "http://proxy.test:8080"},
+            timeout=15,
+        )
+
+    def test_connectivity_api_rejects_invalid_token(self):
+        response = self.plugin.test_connectivity({"site_id": 1}, "wrong-token")
+        self.assertFalse(response.success)
+        self.playwright.get_page_source.assert_not_called()
+
+    def test_connectivity_discloses_missing_global_proxy(self):
+        self.site_oper.sites[1].proxy = True
+        original_proxy = self.module.settings.PROXY_SERVER
+        self.module.settings.PROXY_SERVER = None
+        try:
+            response = self.plugin.test_connectivity({"site_id": 1}, "test-token")
+        finally:
+            self.module.settings.PROXY_SERVER = original_proxy
+        self.assertTrue(response.success)
+        self.assertIn("代理未配置，实际直连", response.message)
+        self.assertIsNone(self.playwright.get_page_source.call_args.kwargs["proxies"])
 
 
 if __name__ == "__main__":

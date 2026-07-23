@@ -16,11 +16,12 @@
     "name": "站点自动更新（自用版）",
     "description": "使用浏览器模拟登录站点获取Cookie和UA。",
     "labels": "站点",
-    "version": "1.3.0",
+    "version": "1.4.0",
     "icon": "Chrome_A.png",
     "author": "thsrite, Picarse",
     "level": 2,
     "history": {
+      "v1.4.0": "增加同网络路径的浏览器连通性测试，并澄清TOTP配置说明",
       "v1.3.0": "修复域名误匹配，增加防重复、失败原因、2FA说明和手动测试",
       "v1.2.0": "基于官方 SiteRefresh v1.2 创建独立自用版本"
     }

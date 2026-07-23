@@ -7,6 +7,7 @@ from app.chain.site import SiteChain
 from app.core.config import settings
 from app.core.event import eventmanager
 from app.db.site_oper import SiteOper
+from app.helper.browser import PlaywrightHelper
 from app.log import logger
 from app.plugins import _PluginBase
 from app.schemas.types import EventType, NotificationType
@@ -18,7 +19,7 @@ class CustomSiteRefresh(_PluginBase):
     plugin_name = "站点自动更新（自用版）"
     plugin_desc = "使用浏览器模拟登录站点获取Cookie和UA。"
     plugin_icon = "Chrome_A.png"
-    plugin_version = "1.3.0"
+    plugin_version = "1.4.0"
     plugin_author = "thsrite, Picarse"
     author_url = "https://github.com/thsrite"
     plugin_config_prefix = "customsiterefresh_"
@@ -33,6 +34,7 @@ class CustomSiteRefresh(_PluginBase):
     _site_locks: Dict[int, Lock] = {}
     _last_attempts: Dict[int, float] = {}
     _test_results: Dict[int, Tuple[bool, str]] = {}
+    _connectivity_results: Dict[int, Tuple[bool, str]] = {}
     _locks_guard = Lock()
     _cooldown_seconds = 60
 
@@ -142,6 +144,11 @@ class CustomSiteRefresh(_PluginBase):
             "endpoint": self.test_site,
             "methods": ["POST"],
             "summary": "立即测试站点登录并更新Cookie和UA",
+        }, {
+            "path": "/connectivity",
+            "endpoint": self.test_connectivity,
+            "methods": ["POST"],
+            "summary": "使用自动登录的浏览器网络测试站点连通性",
         }]
 
     def test_site(self, payload: Dict[str, Any], apikey: str) -> schemas.Response:
@@ -153,6 +160,68 @@ class CustomSiteRefresh(_PluginBase):
             self._test_results[int(site_id)] = (state, message)
         except (TypeError, ValueError):
             pass
+        return schemas.Response(success=state, message=message)
+
+    def test_connectivity(self, payload: Dict[str, Any], apikey: str) -> schemas.Response:
+        if apikey != settings.API_TOKEN:
+            return schemas.Response(success=False, message="API密钥错误")
+
+        site_id = payload.get("site_id") if isinstance(payload, dict) else None
+        try:
+            site_id = int(site_id)
+        except (TypeError, ValueError):
+            return schemas.Response(success=False, message="未获取到有效的站点ID")
+
+        site = SiteOper().get(site_id)
+        if not site:
+            return schemas.Response(
+                success=False,
+                message=f"未获取到站点ID {site_id} 对应的站点数据",
+            )
+
+        site_lock = self._get_site_lock(site_id)
+        if not site_lock.acquire(blocking=False):
+            message = f"站点 {site.name} 正在执行浏览器操作，请稍后重试"
+            self._connectivity_results[site_id] = (False, message)
+            return schemas.Response(success=False, message=message)
+
+        proxy_config = settings.PROXY_SERVER if site.proxy else None
+        if site.proxy and not proxy_config:
+            route = "站点代理未配置，实际直连"
+        else:
+            route = "站点代理" if proxy_config else "直连"
+        timeout = int(site.timeout or 60)
+        started_at = time.monotonic()
+        try:
+            page_source = PlaywrightHelper().get_page_source(
+                url=site.url,
+                proxies=proxy_config,
+                timeout=timeout,
+            )
+            elapsed = time.monotonic() - started_at
+            if page_source:
+                message = (
+                    f"浏览器连通成功（{route}，耗时 {elapsed:.1f} 秒，"
+                    f"页面 {len(page_source)} 字符）"
+                )
+                state = True
+                logger.info(f"站点 {site.name} {message}")
+            else:
+                message = (
+                    f"浏览器访问失败或未在 {timeout} 秒内完成页面加载"
+                    f"（{route}，耗时 {elapsed:.1f} 秒）"
+                )
+                state = False
+                logger.error(f"站点 {site.name} {message}")
+        except Exception as error:
+            elapsed = time.monotonic() - started_at
+            state = False
+            message = f"浏览器连通测试异常（{route}，耗时 {elapsed:.1f} 秒）：{error}"
+            logger.error(f"站点 {site.name} {message}")
+        finally:
+            site_lock.release()
+
+        self._connectivity_results[site_id] = (state, message)
         return schemas.Response(success=state, message=message)
 
     def get_form(self) -> Tuple[List[dict], Dict[str, Any]]:
@@ -186,7 +255,7 @@ class CustomSiteRefresh(_PluginBase):
                             "model": "siteconf",
                             "label": "站点配置",
                             "rows": 5,
-                            "placeholder": "每行一个站点：\n域名|用户名|密码(|2FA验证码或密钥)",
+                            "placeholder": "每行一个站点：\n域名|用户名|密码(|TOTP密钥或当前验证码)",
                         },
                     }],
                 }],
@@ -201,7 +270,8 @@ class CustomSiteRefresh(_PluginBase):
                             "type": "info",
                             "variant": "tonal",
                             "text": "官方自动签到提示Cookie失效时自动触发。"
-                                    "支持在第四段填写2FA验证码或密钥。"
+                                    "自动更新的第四段应填写固定Base32 TOTP密钥；"
+                                    "当前6位验证码只适合立即测试。"
                                     "账号配置会保存在MoviePilot数据库中，请保护数据库和备份。"
                                     "不是所有站点都支持浏览器模拟登录。",
                         },
@@ -220,9 +290,15 @@ class CustomSiteRefresh(_PluginBase):
             if not find_site_config(site.url, self._site_configs):
                 continue
             last_result = self._test_results.get(site.id)
+            connectivity_result = self._connectivity_results.get(site.id)
             subtitle = site.url
             if last_result:
-                subtitle += f"｜上次测试：{'成功' if last_result[0] else '失败'} - {last_result[1]}"
+                subtitle += f"｜登录：{'成功' if last_result[0] else '失败'} - {last_result[1]}"
+            if connectivity_result:
+                subtitle += (
+                    f"｜连通性：{'成功' if connectivity_result[0] else '失败'}"
+                    f" - {connectivity_result[1]}"
+                )
             rows.append({
                 "component": "VListItem",
                 "props": {
@@ -231,6 +307,22 @@ class CustomSiteRefresh(_PluginBase):
                     "prepend-icon": "mdi-web-refresh",
                 },
                 "content": [{
+                    "component": "VBtn",
+                    "props": {
+                        "color": "info",
+                        "variant": "tonal",
+                        "size": "small",
+                        "class": "mr-2",
+                    },
+                    "text": "测试连通性",
+                    "events": {
+                        "click": {
+                            "api": f"plugin/{self.__class__.__name__}/connectivity?apikey={settings.API_TOKEN}",
+                            "method": "post",
+                            "params": {"site_id": site.id},
+                        }
+                    },
+                }, {
                     "component": "VBtn",
                     "props": {
                         "color": "primary",
@@ -264,7 +356,8 @@ class CustomSiteRefresh(_PluginBase):
                 "type": "warning",
                 "variant": "tonal",
                 "class": "mb-4",
-                "text": "立即测试会真实登录站点，并在成功后覆盖该站点当前的Cookie和UA。",
+                "text": "测试连通性不提交账号且不修改Cookie/UA；"
+                        "立即测试会真实登录，并在成功后覆盖当前Cookie和UA。",
             },
         }, {
             "component": "VList",
