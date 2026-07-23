@@ -243,14 +243,12 @@ class CustomSiteRefreshFlowTest(unittest.TestCase):
         self.assertIn("冷却期", second_message)
         self.site_chain.update_cookie.assert_called_once()
 
-    def test_cloudflare_bootstrap_returns_only_clearance_cookie_and_ua(self):
+    def test_cloudflare_bootstrap_returns_full_session_and_matching_ua(self):
         site = self.site_oper.sites[1]
         site.cookie = "session=secret; cf_clearance=clear; __cf_bm=bm; other=value"
         clearance, ua = self.plugin._cloudflare_bootstrap(site)
-        self.assertEqual(clearance, "cf_clearance=clear; __cf_bm=bm")
+        self.assertEqual(clearance, site.cookie)
         self.assertEqual(ua, "Existing Browser UA")
-        self.assertNotIn("session", clearance)
-        self.assertNotIn("other", clearance)
 
     def test_cloudflare_site_uses_compatible_path_without_official_retry(self):
         site = self.site_oper.sites[1]
@@ -271,7 +269,7 @@ class CustomSiteRefreshFlowTest(unittest.TestCase):
         args = compatible_login.call_args.args
         self.assertIs(args[0], site)
         self.assertEqual(args[1]["username"], "alice")
-        self.assertEqual(args[2], "cf_clearance=clearance-value")
+        self.assertEqual(args[2], "session=old; cf_clearance=clearance-value")
         self.assertEqual(args[3], "Existing Browser UA")
         self.site_chain.update_cookie.assert_not_called()
 

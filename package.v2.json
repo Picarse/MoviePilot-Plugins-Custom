@@ -16,11 +16,12 @@
     "name": "站点自动更新（自用版）",
     "description": "使用浏览器模拟登录站点获取Cookie和UA。",
     "labels": "站点",
-    "version": "1.6.0",
+    "version": "1.6.1",
     "icon": "Chrome_A.png",
     "author": "thsrite, Picarse",
     "level": 2,
     "history": {
+      "v1.6.1": "Cloudflare引导改用完整旧会话，会话仍有效时不重复提交密码",
       "v1.6.0": "复用Cloudflare clearance和UA登录，并容忍非关键networkidle超时",
       "v1.5.2": "登录页诊断改用与自动登录一致的可视浏览器模式",
       "v1.5.1": "增加不提交凭据的浏览器登录页诊断入口",

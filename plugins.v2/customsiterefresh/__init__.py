@@ -20,7 +20,7 @@ class CustomSiteRefresh(_PluginBase):
     plugin_name = "站点自动更新（自用版）"
     plugin_desc = "使用浏览器模拟登录站点获取Cookie和UA。"
     plugin_icon = "Chrome_A.png"
-    plugin_version = "1.6.0"
+    plugin_version = "1.6.1"
     plugin_author = "thsrite, Picarse"
     author_url = "https://github.com/thsrite"
     plugin_config_prefix = "customsiterefresh_"
@@ -41,16 +41,16 @@ class CustomSiteRefresh(_PluginBase):
 
     @staticmethod
     def _cloudflare_bootstrap(site) -> Tuple[str, str]:
-        """Return only Cloudflare clearance cookies and their matching stored UA."""
+        """Return the stored session only when it contains Cloudflare clearance."""
         cookie = str(getattr(site, "cookie", "") or "")
-        values = []
+        has_clearance = False
         for item in cookie.split(";"):
-            name, separator, value = item.strip().partition("=")
-            if separator and name.lower() in {"cf_clearance", "__cf_bm"}:
-                values.append(f"{name}={value}")
-        clearance = "; ".join(values)
+            name, separator, _ = item.strip().partition("=")
+            if separator and name.lower() == "cf_clearance":
+                has_clearance = True
+                break
         ua = str(getattr(site, "ua", "") or "")
-        return (clearance, ua) if clearance and ua else ("", "")
+        return (cookie, ua) if has_clearance and ua else ("", "")
 
     @staticmethod
     def _update_cookie_with_clearance(
@@ -114,6 +114,16 @@ class CustomSiteRefresh(_PluginBase):
                         if time.monotonic() >= deadline:
                             return None, None, "Cloudflare挑战未通过，未提交账号密码"
                         time.sleep(0.5)
+                    from app.utils.site import SiteUtils
+
+                    html_text = page.content()
+                    if SiteUtils.is_logged_in(html_text):
+                        refreshed_cookie = CookieHelper.parse_cookies(page.context.cookies())
+                        return (
+                            refreshed_cookie or cookies or clearance,
+                            page.evaluate("() => window.navigator.userAgent"),
+                            "现有会话仍有效，已重新采集Cookie和UA",
+                        )
                     return callback(TolerantPage(page))
                 except Exception as error:
                     return None, None, f"Cloudflare兼容登录异常：{type(error).__name__}"
@@ -395,12 +405,16 @@ class CustomSiteRefresh(_PluginBase):
                     str(element.get("type") or "").lower()
                     for element in elements if element.get("type")
                 })
+                from app.utils.site import SiteUtils
+
+                logged_in = SiteUtils.is_logged_in(page.content())
                 return {
                     "url": snapshot.get("url"),
                     "title": snapshot.get("title"),
                     "status": snapshot.get("status"),
                     "input_types": input_types,
                     "has_password": "password" in input_types,
+                    "logged_in": logged_in,
                 }
 
             result = helper.with_session(
@@ -413,10 +427,12 @@ class CustomSiteRefresh(_PluginBase):
             elapsed = time.monotonic() - started_at
             title = str(result.get("title") or "")
             has_password = bool(result.get("has_password"))
-            state = has_password
+            logged_in = bool(result.get("logged_in"))
+            state = has_password or logged_in
             message = (
                 f"登录页检查完成（直连，耗时 {elapsed:.1f} 秒，"
-                f"标题 {title[:80] or '无'}，密码框 {'存在' if has_password else '不存在'}）"
+                f"标题 {title[:80] or '无'}，"
+                f"状态 {'已登录' if logged_in else ('登录表单' if has_password else '未识别')}）"
             )
             return schemas.Response(success=state, message=message, data=result)
         except Exception as error:
