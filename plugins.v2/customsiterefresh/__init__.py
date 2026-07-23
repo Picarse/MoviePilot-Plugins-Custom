@@ -20,7 +20,7 @@ class CustomSiteRefresh(_PluginBase):
     plugin_name = "站点自动更新（自用版）"
     plugin_desc = "使用浏览器模拟登录站点获取Cookie和UA。"
     plugin_icon = "Chrome_A.png"
-    plugin_version = "1.6.1"
+    plugin_version = "1.6.2"
     plugin_author = "thsrite, Picarse"
     author_url = "https://github.com/thsrite"
     plugin_config_prefix = "customsiterefresh_"
@@ -51,6 +51,20 @@ class CustomSiteRefresh(_PluginBase):
                 break
         ua = str(getattr(site, "ua", "") or "")
         return (cookie, ua) if has_clearance and ua else ("", "")
+
+    @staticmethod
+    def _merge_cookie_header(existing: str, browser_cookies: List[dict]) -> str:
+        """Merge refreshed browser cookies without dropping injected session cookies."""
+        values: Dict[str, Tuple[str, str]] = {}
+        for item in str(existing or "").split(";"):
+            name, separator, value = item.strip().partition("=")
+            if separator and name:
+                values[name.lower()] = (name, value)
+        for cookie in browser_cookies or []:
+            name = str(cookie.get("name") or "")
+            if name:
+                values[name.lower()] = (name, str(cookie.get("value") or ""))
+        return "; ".join(f"{name}={value}" for name, value in values.values())
 
     @staticmethod
     def _update_cookie_with_clearance(
@@ -118,9 +132,11 @@ class CustomSiteRefresh(_PluginBase):
 
                     html_text = page.content()
                     if SiteUtils.is_logged_in(html_text):
-                        refreshed_cookie = CookieHelper.parse_cookies(page.context.cookies())
+                        refreshed_cookie = CustomSiteRefresh._merge_cookie_header(
+                            cookies or clearance, page.context.cookies()
+                        )
                         return (
-                            refreshed_cookie or cookies or clearance,
+                            refreshed_cookie,
                             page.evaluate("() => window.navigator.userAgent"),
                             "现有会话仍有效，已重新采集Cookie和UA",
                         )

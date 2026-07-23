@@ -250,6 +250,20 @@ class CustomSiteRefreshFlowTest(unittest.TestCase):
         self.assertEqual(clearance, site.cookie)
         self.assertEqual(ua, "Existing Browser UA")
 
+    def test_merge_cookie_header_preserves_session_and_refreshes_by_name(self):
+        merged = self.plugin._merge_cookie_header(
+            "session=old; cf_clearance=old-clearance; keep=value",
+            [
+                {"name": "cf_clearance", "value": "new-clearance"},
+                {"name": "new_cookie", "value": "new-value"},
+            ],
+        )
+        self.assertIn("session=old", merged)
+        self.assertIn("cf_clearance=new-clearance", merged)
+        self.assertNotIn("cf_clearance=old-clearance", merged)
+        self.assertIn("keep=value", merged)
+        self.assertIn("new_cookie=new-value", merged)
+
     def test_cloudflare_site_uses_compatible_path_without_official_retry(self):
         site = self.site_oper.sites[1]
         site.cookie = "session=old; cf_clearance=clearance-value"
