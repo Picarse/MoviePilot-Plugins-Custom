@@ -43,5 +43,17 @@
     "history": {
       "v1.0.0": "基于 DDSRem TencentVideoDiscover v1.0.3 创建独立自用版本"
     }
+  },
+  "CustomYoukuVideoDiscover": {
+    "name": "优酷视频探索（自用版）",
+    "description": "让探索支持优酷视频的数据浏览。",
+    "labels": "探索",
+    "version": "1.0.0",
+    "icon": "https://img.alicdn.com/imgextra/i2/O1CN01BeAcgL1ywY0G5nSn8_!!6000000006643-2-tps-195-195.png",
+    "author": "Picarse",
+    "level": 1,
+    "history": {
+      "v1.0.0": "新增优酷电视剧、电影、综艺、动漫、少儿和纪录片探索数据源"
+    }
   }
 }
