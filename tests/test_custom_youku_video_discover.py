@@ -1,4 +1,5 @@
 import importlib.util
+import json
 import sys
 import types
 import unittest
@@ -135,6 +136,62 @@ class CustomYoukuVideoCoreTest(unittest.TestCase):
         )
         self.assertEqual(CORE.filter_media_items(items, genre="爱情"), [])
 
+    def test_extract_detail_metadata_normalizes_rich_fields(self):
+        payload = {"data": {"2019030100": {
+            "success": True,
+            "data": {"nodes": [{"data": {
+                "showId": "show-1",
+                "showName": "悬案",
+                "showReleaseTime": "2026-07-03 21:30:00",
+                "introSubTitle": "中国大陆·2026·悬疑/罪案",
+                "desc": "详情简介",
+                "lastStage": 14,
+            }}]},
+        }}}
+        detail = CORE.extract_detail_metadata(payload, mtype="tv")
+        self.assertEqual(detail["media_id"], "show-1")
+        self.assertEqual(detail["year"], "2026")
+        self.assertEqual(detail["regions"], ("中国",))
+        self.assertEqual(detail["genres"], ("悬疑", "罪案"))
+        self.assertEqual(detail["release_date"], "2026-07-03")
+        self.assertEqual(detail["description"], "详情简介")
+        self.assertEqual(detail["total_episodes"], 14)
+        self.assertIsNone(detail["update_date"])
+        self.assertEqual(
+            CORE.media_overview(detail), "共14集\n详情简介"
+        )
+
+        unknown_region = {"data": {"2019030100": {
+            "success": True,
+            "data": {"introSubTitle": "荷兰·2024·剧情"},
+        }}}
+        self.assertEqual(
+            CORE.extract_detail_metadata(unknown_region)["regions"],
+            ("其他",),
+        )
+
+    def test_detail_date_and_filter_sort_are_distinguished(self):
+        payload = {"data": {"2019030100": {
+            "success": True,
+            "data": {"data": {
+                "introSubTitle": "中国·2026·美食",
+                "lastStage": 20260723,
+            }},
+        }}}
+        detail = CORE.extract_detail_metadata(payload, mtype="documentary")
+        self.assertEqual(detail["update_date"], "2026-07-23")
+        self.assertIsNone(detail["total_episodes"])
+        items = [
+            {"media_id": "old", "year": "2025", "regions": ("中国",),
+             "genres": ("美食",), "release_date": "2025-01-01", "tags": ()},
+            {"media_id": "new", "year": "2026", "regions": ("中国",),
+             "genres": ("美食",), "release_date": "2026-07-01", "tags": ()},
+        ]
+        filtered = CORE.filter_media_items(
+            items, region="中国", year="2026", sort="release_desc"
+        )
+        self.assertEqual([item["media_id"] for item in filtered], ["new"])
+
 
 def load_plugin_module():
     requests_module = types.ModuleType("requests")
@@ -224,11 +281,19 @@ class CustomYoukuVideoPluginTest(unittest.TestCase):
         cls.module, cls.requests, cls.events, cls.config = load_plugin_module()
 
     def setUp(self):
+        self.requests.Session.reset_mock()
+        self.requests.Session.side_effect = None
         self.plugin = self.module.CustomYoukuVideoDiscover()
         self.plugin._enabled = True
+        self.plugin._request_details = Mock(return_value={})
 
     def test_plugin_identity_and_discover_source_are_independent(self):
-        self.assertEqual(self.plugin.plugin_version, "1.2.0")
+        self.assertEqual(self.plugin.plugin_version, "1.3.0")
+        package = json.loads((ROOT / "package.v2.json").read_text(encoding="utf-8"))
+        self.assertEqual(
+            self.plugin.plugin_version,
+            package["CustomYoukuVideoDiscover"]["version"],
+        )
         self.assertEqual(
             self.plugin.plugin_config_prefix,
             "customyoukuvideodiscover_",
@@ -241,6 +306,9 @@ class CustomYoukuVideoPluginTest(unittest.TestCase):
         self.assertIn("plugin/CustomYoukuVideoDiscover/", source.api_path)
         self.assertEqual(source.filter_params["mtype"], "tv")
         self.assertIn("genre", source.filter_params)
+        self.assertIn("region", source.filter_params)
+        self.assertIn("year", source.filter_params)
+        self.assertIn("sort", source.filter_params)
         self.assertGreater(len(source.filter_ui), 3)
         self.plugin.discover_source(self.events.Event(event_data))
         self.assertEqual(len(event_data.extra_sources), 1)
@@ -324,6 +392,102 @@ class CustomYoukuVideoPluginTest(unittest.TestCase):
             self.plugin._request_feed_pages.call_args.args[2],
             self.module.DEFAULT_PREFETCH_PAGES,
         )
+
+    def test_deep_filters_use_bounded_detail_enrichment(self):
+        self.plugin._detail_limit = 3
+        self.plugin._request_catalog = Mock(return_value=[
+            {
+                "title": f"节目{index}", "year": None,
+                "media_id": f"id-{index}",
+                "poster": f"https://m.ykimg.com/{index}.jpg",
+                "tags": (), "genres": (), "regions": (),
+                "release_date": None, "description": None,
+            }
+            for index in range(5)
+        ])
+        self.plugin._request_details = Mock(return_value={
+            "id-0": {"year": "2025", "regions": ("中国",),
+                     "genres": ("剧情",), "release_date": "2025-01-01"},
+            "id-1": {"year": "2026", "regions": ("中国",),
+                     "genres": ("悬疑",), "release_date": "2026-01-01",
+                     "description": "较早"},
+            "id-2": {"year": "2026", "regions": ("中国",),
+                     "genres": ("悬疑",), "release_date": "2026-07-01",
+                     "description": "最新"},
+        })
+        results = self.plugin.youkuvideo_discover(
+            mtype="tv", region="中国", year="2026", genre="悬疑",
+            sort="release_desc", page=1, count=10,
+        )
+        self.assertEqual([result.media_id for result in results], ["id-2", "id-1"])
+        self.assertEqual(results[0].overview, "最新")
+        requested_ids = json.loads(
+            self.plugin._request_details.call_args.args[1]
+        )
+        self.assertEqual(requested_ids, ["id-0", "id-1", "id-2"])
+
+    def test_regular_detail_enrichment_is_also_bounded(self):
+        self.plugin._detail_limit = 2
+        items = [
+            {"media_id": f"id-{index}", "genres": (), "regions": ()}
+            for index in range(5)
+        ]
+        self.plugin._request_details = Mock(return_value={})
+
+        enriched = self.plugin._enrich_items("tv", items)
+
+        self.assertEqual(len(enriched), 5)
+        requested_ids = json.loads(
+            self.plugin._request_details.call_args.args[1]
+        )
+        self.assertEqual(requested_ids, ["id-0", "id-1"])
+
+    def test_detail_request_body_uses_anonymous_web_component(self):
+        outer = json.loads(
+            self.plugin._detail_data("show-1")["data"]
+        )
+        params = json.loads(outer["params"])
+        self.assertEqual(outer["ms_codes"], "2019030100")
+        self.assertEqual(params["showId"], "show-1")
+        self.assertEqual(params["biz"], "new_detail_web2")
+
+    def test_fetch_detail_batch_bootstraps_and_signs_anonymous_request(self):
+        class CookieJar(list):
+            def get_dict(self):
+                return {cookie.name: cookie.value for cookie in self}
+
+            def update(self, _cookies):
+                return None
+
+        bootstrap_response = Mock()
+        bootstrap_response.raise_for_status.return_value = None
+        bootstrap_response.json.return_value = {"ret": ["FAIL_SYS_TOKEN_EMPTY"]}
+        detail_response = Mock()
+        detail_response.raise_for_status.return_value = None
+        detail_response.json.return_value = {"data": {"2019030100": {
+            "success": True,
+            "data": {"showId": "show-1", "showName": "节目",
+                     "introSubTitle": "中国·2026·剧情", "lastStage": 12},
+        }}}
+        bootstrap_client = Mock()
+        bootstrap_client.cookies = CookieJar([
+            types.SimpleNamespace(name="_m_h5_tk", value="token_expiry"),
+            types.SimpleNamespace(name="_m_h5_tk_enc", value="encoded"),
+        ])
+        bootstrap_client.get.return_value = bootstrap_response
+        worker_client = Mock()
+        worker_client.cookies = CookieJar()
+        worker_client.get.return_value = detail_response
+        self.requests.Session.side_effect = [bootstrap_client, worker_client]
+
+        details = self.plugin._fetch_detail_batch("tv", ("show-1",))
+
+        self.assertEqual(details["show-1"]["year"], "2026")
+        self.assertEqual(details["show-1"]["total_episodes"], 12)
+        self.assertEqual(worker_client.get.call_count, 1)
+        signed_params = worker_client.get.call_args.kwargs["params"]
+        self.assertEqual(signed_params["api"], self.module.DETAIL_API)
+        self.assertTrue(signed_params["sign"])
 
     def test_fetch_feed_bootstraps_token_and_retries_with_signature(self):
         first = Mock()

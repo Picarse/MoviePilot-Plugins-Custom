@@ -62,6 +62,19 @@ SECTION_OPTIONS = (
     ("feed", "更多推荐"),
 )
 
+REGION_OPTIONS = (
+    "中国", "中国香港", "中国台湾", "美国", "英国", "法国",
+    "德国", "日本", "韩国", "泰国", "印度", "加拿大",
+    "澳大利亚", "西班牙", "意大利", "俄罗斯", "其他",
+)
+
+SORT_OPTIONS = (
+    ("release_desc", "最新上线"),
+    ("release_asc", "上映时间最早"),
+)
+
+DETAIL_CODE = "2019030100"
+
 INITIAL_DATA_MARKER = "window.__INITIAL_DATA__ ="
 DEFAULT_POSTER = (
     "https://img.alicdn.com/imgextra/i2/"
@@ -217,7 +230,158 @@ def _media_item(
         "genres": genres,
         "section": section,
         "module_title": module_title,
+        "regions": (),
+        "release_date": None,
+        "description": None,
+        "total_episodes": None,
+        "update_date": None,
     }
+
+
+def _first_detail_values(value: Any, keys: Iterable[str]) -> Dict[str, Any]:
+    wanted = set(keys)
+    found: Dict[str, Any] = {}
+
+    def visit(node: Any):
+        if isinstance(node, dict):
+            for key, child in node.items():
+                if key in wanted and key not in found and child not in (None, ""):
+                    found[key] = child
+                visit(child)
+        elif isinstance(node, list):
+            for child in node:
+                visit(child)
+
+    visit(value)
+    return found
+
+
+def _normalize_region(value: str) -> str:
+    aliases = {
+        "大陆": "中国",
+        "内地": "中国",
+        "中国大陆": "中国",
+        "香港": "中国香港",
+        "台湾": "中国台湾",
+        "澳洲": "澳大利亚",
+    }
+    return aliases.get(value, value)
+
+
+def extract_detail_metadata(
+    payload: Any,
+    mtype: Optional[str] = None,
+    code: str = DETAIL_CODE,
+) -> Dict[str, Any]:
+    """Extract stable show metadata from an anonymous Columbus detail response."""
+    if not isinstance(payload, dict):
+        return {}
+    data = payload.get("data")
+    block = data.get(code) if isinstance(data, dict) else None
+    if not isinstance(block, dict) or block.get("success") is not True:
+        return {}
+    root = block.get("data")
+    fields = _first_detail_values(root, (
+        "showId", "showName", "showReleaseTime", "introSubTitle",
+        "desc", "lastStage", "videoCategory", "showCategory",
+    ))
+    subtitle = str(fields.get("introSubTitle") or "").strip()
+    parts = [
+        part.strip()
+        for part in re.split(r"[·/|、,，]", subtitle)
+        if part.strip()
+    ]
+    year = None
+    regions = []
+    genres = []
+    known_regions = set(REGION_OPTIONS) | {
+        "大陆", "内地", "中国大陆", "香港", "台湾", "澳洲",
+    }
+    year_index = next(
+        (
+            index
+            for index, part in enumerate(parts)
+            if re.fullmatch(r"(?:19|20)\d{2}", part)
+        ),
+        None,
+    )
+    for index, part in enumerate(parts):
+        if re.fullmatch(r"(?:19|20)\d{2}", part):
+            year = part
+        elif part in known_regions or (
+            year_index is not None and index < year_index
+        ):
+            normalized = _normalize_region(part)
+            regions.append(
+                normalized if normalized in REGION_OPTIONS else "其他"
+            )
+        else:
+            genres.append(part)
+
+    release_time = str(fields.get("showReleaseTime") or "").strip()
+    release_match = re.match(r"((?:19|20)\d{2})-(\d{2})-(\d{2})", release_time)
+    release_date = release_match.group(0) if release_match else None
+    if not year and release_match:
+        year = release_match.group(1)
+
+    total_episodes = None
+    update_date = None
+    last_stage = str(fields.get("lastStage") or "").strip()
+    if re.fullmatch(r"(?:19|20)\d{6}", last_stage):
+        update_date = f"{last_stage[:4]}-{last_stage[4:6]}-{last_stage[6:]}"
+    elif last_stage.isdigit():
+        parsed_stage = int(last_stage)
+        if parsed_stage > 0:
+            total_episodes = parsed_stage
+
+    return {
+        "media_id": str(fields.get("showId") or "").strip() or None,
+        "title": str(fields.get("showName") or "").strip() or None,
+        "year": year,
+        "regions": tuple(dict.fromkeys(regions)),
+        "genres": tuple(dict.fromkeys(genres)),
+        "release_date": release_date,
+        "description": str(fields.get("desc") or "").strip() or None,
+        "total_episodes": total_episodes,
+        "update_date": update_date,
+        "category": str(
+            fields.get("videoCategory") or fields.get("showCategory") or ""
+        ).strip() or None,
+    }
+
+
+def merge_detail_metadata(
+    item: Dict[str, Any], detail: Optional[Dict[str, Any]]
+) -> Dict[str, Any]:
+    """Merge detail fields while retaining richer catalog artwork and tags."""
+    merged = dict(item)
+    if not detail:
+        return merged
+    for key in (
+        "year", "release_date", "description", "total_episodes", "update_date",
+    ):
+        if detail.get(key) not in (None, ""):
+            merged[key] = detail[key]
+    merged["regions"] = tuple(dict.fromkeys(
+        [*(item.get("regions") or ()), *(detail.get("regions") or ())]
+    ))
+    merged["genres"] = tuple(dict.fromkeys(
+        [*(item.get("genres") or ()), *(detail.get("genres") or ())]
+    ))
+    return merged
+
+
+def media_overview(item: Dict[str, Any]) -> Optional[str]:
+    """Combine update semantics and the synopsis for MoviePilot cards."""
+    status = None
+    if item.get("total_episodes"):
+        status = f"共{item['total_episodes']}集"
+    elif item.get("update_date"):
+        status = f"更新日期：{item['update_date']}"
+    description = str(item.get("description") or "").strip()
+    if status and description:
+        return f"{status}\n{description}"
+    return status or description or None
 
 
 def extract_media_items(payload: Any) -> List[Dict[str, Any]]:
@@ -322,6 +486,9 @@ def filter_media_items(
     access: Optional[str] = None,
     progress: Optional[str] = None,
     section: Optional[str] = None,
+    region: Optional[str] = None,
+    year: Optional[str] = None,
+    sort: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     results = []
     access_tag = {
@@ -334,6 +501,15 @@ def filter_media_items(
         genres = tuple(item.get("genres") or ())
         if genre and genre not in genres:
             continue
+        if region and region not in tuple(item.get("regions") or ()):
+            continue
+        if year:
+            item_year = str(item.get("year") or "")
+            if year == "earlier":
+                if not item_year.isdigit() or int(item_year) >= 2010:
+                    continue
+            elif item_year != str(year):
+                continue
         if section and item.get("section") != section:
             continue
         if access_tag and access_tag not in tags:
@@ -347,6 +523,12 @@ def filter_media_items(
         ):
             continue
         results.append(item)
+    if sort in {"release_desc", "release_asc"}:
+        reverse = sort == "release_desc"
+        dated = [item for item in results if item.get("release_date")]
+        undated = [item for item in results if not item.get("release_date")]
+        dated.sort(key=lambda item: str(item["release_date"]), reverse=reverse)
+        results = [*dated, *undated]
     return results
 
 

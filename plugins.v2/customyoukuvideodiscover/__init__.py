@@ -3,6 +3,7 @@
 import hashlib
 import json
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Dict, List, Optional, Tuple
 
 import requests
@@ -18,12 +19,18 @@ from app.schemas.types import ChainEventType
 
 from .core import (
     CHANNEL_PARAMS,
+    DETAIL_CODE,
     GENRE_OPTIONS,
+    REGION_OPTIONS,
     SECTION_OPTIONS,
+    SORT_OPTIONS,
     clamp_positive_int,
+    extract_detail_metadata,
     extract_feed_state,
     extract_mtop_state,
     filter_media_items,
+    media_overview,
+    merge_detail_metadata,
     page_items,
     parse_initial_data,
 )
@@ -34,6 +41,7 @@ MTOP_URL = "https://acs.youku.com/h5/{api}/1.0/"
 MTOP_APP_KEY = "24679788"
 MTOP_API = "mtop.youku.columbus.home.query"
 MTOP_CODE = "2019061000"
+DETAIL_API = "mtop.youku.columbus.gateway.new.execute"
 API_HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -46,6 +54,9 @@ API_HEADERS = {
 REQUEST_TIMEOUT = 15
 DEFAULT_PREFETCH_PAGES = 4
 MAX_PREFETCH_PAGES = 8
+DEFAULT_DETAIL_LIMIT = 48
+MAX_DETAIL_LIMIT = 100
+DETAIL_WORKERS = 6
 IMAGE_DOMAINS = (
     "liangcang-material.alicdn.com",
     "img.alicdn.com",
@@ -61,7 +72,7 @@ class CustomYoukuVideoDiscover(_PluginBase):
         "https://img.alicdn.com/imgextra/i2/"
         "O1CN01BeAcgL1ywY0G5nSn8_!!6000000006643-2-tps-195-195.png"
     )
-    plugin_version = "1.2.0"
+    plugin_version = "1.3.0"
     plugin_author = "Picarse"
     author_url = "https://github.com/Picarse"
     plugin_config_prefix = "customyoukuvideodiscover_"
@@ -70,6 +81,7 @@ class CustomYoukuVideoDiscover(_PluginBase):
 
     _enabled = False
     _prefetch_pages = DEFAULT_PREFETCH_PAGES
+    _detail_limit = DEFAULT_DETAIL_LIMIT
 
     def init_plugin(self, config: dict = None):
         config = config or {}
@@ -78,6 +90,11 @@ class CustomYoukuVideoDiscover(_PluginBase):
             config.get("prefetch_pages"),
             default=DEFAULT_PREFETCH_PAGES,
             maximum=MAX_PREFETCH_PAGES,
+        )
+        self._detail_limit = clamp_positive_int(
+            config.get("detail_limit"),
+            default=DEFAULT_DETAIL_LIMIT,
+            maximum=MAX_DETAIL_LIMIT,
         )
         for domain in IMAGE_DOMAINS:
             if domain not in settings.SECURITY_IMAGE_DOMAINS:
@@ -129,9 +146,29 @@ class CustomYoukuVideoDiscover(_PluginBase):
                             },
                         }],
                     },
+                    {
+                        "component": "VCol",
+                        "props": {"cols": 12, "md": 4},
+                        "content": [{
+                            "component": "VTextField",
+                            "props": {
+                                "model": "detail_limit",
+                                "label": "深度筛选补全上限",
+                                "type": "number",
+                                "min": 1,
+                                "max": MAX_DETAIL_LIMIT,
+                                "hint": "默认48条；地区、年份、精确题材和时间排序按需补全，避免首次加载请求过多",
+                                "persistent-hint": True,
+                            },
+                        }],
+                    },
                 ],
             }],
-        }], {"enabled": False, "prefetch_pages": DEFAULT_PREFETCH_PAGES}
+        }], {
+            "enabled": False,
+            "prefetch_pages": DEFAULT_PREFETCH_PAGES,
+            "detail_limit": DEFAULT_DETAIL_LIMIT,
+        }
 
     @staticmethod
     def get_page() -> List[dict]:
@@ -222,6 +259,142 @@ class CustomYoukuVideoDiscover(_PluginBase):
             separators=(",", ":"),
         )
         return api, code, {"data": data}
+
+    @staticmethod
+    def _detail_data(show_id: str) -> Dict[str, str]:
+        params = {
+            "biz": "new_detail_web2",
+            "componentVersion": "3",
+            "debug": 0,
+            "gray": 0,
+            "ip": "127.0.0.1",
+            "platform": "pc",
+            "scene": "web_page",
+            "showId": show_id,
+            "source": "pcNoPrev",
+            "userId": 0,
+            "utdid": "homepage_empty_cna",
+        }
+        system_info = {
+            "os": "pc",
+            "device": "pc",
+            "ver": "1.0.0",
+            "appPackageKey": "pcweb",
+            "appPackageId": "pcweb",
+        }
+        data = json.dumps(
+            {
+                "ms_codes": DETAIL_CODE,
+                "params": json.dumps(params, separators=(",", ":")),
+                "system_info": json.dumps(system_info, separators=(",", ":")),
+            },
+            separators=(",", ":"),
+        )
+        return {"data": data}
+
+    @staticmethod
+    def _call_mtop(
+        client: Any,
+        api: str,
+        request_data: Dict[str, str],
+        token: str = "",
+        referer: str = "https://www.youku.com/",
+    ) -> Dict[str, Any]:
+        timestamp = str(int(time.time() * 1000))
+        sign_source = f"{token}&{timestamp}&{MTOP_APP_KEY}&{request_data['data']}"
+        query = {
+            "jsv": "2.7.2",
+            "appKey": MTOP_APP_KEY,
+            "t": timestamp,
+            "sign": hashlib.md5(sign_source.encode()).hexdigest(),
+            "api": api,
+            "v": "1.0",
+            "type": "originaljson",
+            "dataType": "json",
+            **request_data,
+        }
+        response = client.get(
+            MTOP_URL.format(api=api),
+            params=query,
+            headers={
+                **API_HEADERS,
+                "Referer": referer,
+                "Origin": "https://www.youku.com",
+            },
+            timeout=REQUEST_TIMEOUT,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        return payload if isinstance(payload, dict) else {}
+
+    @staticmethod
+    def _fetch_detail_batch(
+        mtype: str, media_ids: Tuple[str, ...]
+    ) -> Dict[str, Dict[str, Any]]:
+        media_ids = tuple(dict.fromkeys(
+            str(media_id).strip() for media_id in media_ids if str(media_id).strip()
+        ))
+        if not media_ids:
+            return {}
+        client = None
+        try:
+            client = requests.Session()
+            first_data = CustomYoukuVideoDiscover._detail_data(media_ids[0])
+            CustomYoukuVideoDiscover._call_mtop(
+                client, DETAIL_API, first_data
+            )
+            token = next(
+                (
+                    cookie.value.split("_", 1)[0]
+                    for cookie in client.cookies
+                    if cookie.name == "_m_h5_tk"
+                ),
+                "",
+            )
+            if not token:
+                return {}
+            session_cookies = client.cookies.get_dict()
+
+            def fetch(show_id: str):
+                worker = requests.Session()
+                try:
+                    worker.cookies.update(session_cookies)
+                    payload = CustomYoukuVideoDiscover._call_mtop(
+                        worker,
+                        DETAIL_API,
+                        CustomYoukuVideoDiscover._detail_data(show_id),
+                        token,
+                    )
+                    return show_id, extract_detail_metadata(payload, mtype=mtype)
+                finally:
+                    worker.close()
+
+            details: Dict[str, Dict[str, Any]] = {}
+            with ThreadPoolExecutor(
+                max_workers=min(DETAIL_WORKERS, len(media_ids))
+            ) as executor:
+                futures = {
+                    executor.submit(fetch, show_id): show_id
+                    for show_id in media_ids
+                }
+                for future in as_completed(futures):
+                    show_id = futures[future]
+                    try:
+                        _, detail = future.result()
+                    except (requests.RequestException, TypeError, ValueError):
+                        continue
+                    if detail:
+                        details[show_id] = detail
+            return details
+        except (requests.RequestException, TypeError, ValueError) as error:
+            logger.warning(
+                f"优酷详情补全失败：频道={mtype}，数量={len(media_ids)}，"
+                f"错误类型={type(error).__name__}"
+            )
+            return {}
+        finally:
+            if client is not None:
+                client.close()
 
     @staticmethod
     def _fetch_feed_pages(
@@ -363,6 +536,36 @@ class CustomYoukuVideoDiscover(_PluginBase):
             items.append(item)
         return items
 
+    @cached(region="custom_youkuvideo_details_v13", ttl=21600, skip_none=True)
+    def _request_details(
+        self, mtype: str, media_ids_json: str
+    ) -> Optional[Dict[str, Dict[str, Any]]]:
+        try:
+            media_ids = json.loads(media_ids_json)
+        except (TypeError, ValueError):
+            return {}
+        if not isinstance(media_ids, list):
+            return {}
+        details = self._fetch_detail_batch(mtype, tuple(media_ids))
+        return details or None
+
+    def _enrich_items(
+        self, mtype: str, items: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        if not items:
+            return []
+        bounded_items = items[:self._detail_limit]
+        media_ids = [str(item.get("media_id") or "") for item in bounded_items]
+        details = self._request_details(
+            mtype,
+            json.dumps(media_ids, ensure_ascii=False, separators=(",", ":")),
+        ) or {}
+        enriched = [
+            merge_detail_metadata(item, details.get(str(item.get("media_id") or "")))
+            for item in bounded_items
+        ]
+        return [*enriched, *items[len(bounded_items):]]
+
     def youkuvideo_discover(
         self,
         mtype: str = "tv",
@@ -370,6 +573,9 @@ class CustomYoukuVideoDiscover(_PluginBase):
         access: Optional[str] = None,
         progress: Optional[str] = None,
         section: Optional[str] = None,
+        region: Optional[str] = None,
+        year: Optional[str] = None,
+        sort: Optional[str] = None,
         page: int = 1,
         count: int = 10,
     ) -> List[schemas.MediaInfo]:
@@ -381,10 +587,34 @@ class CustomYoukuVideoDiscover(_PluginBase):
         page = clamp_positive_int(page, default=1, maximum=1000)
         count = clamp_positive_int(count, default=10, maximum=100)
         catalog = self._request_catalog(mtype, self._prefetch_pages)
-        items = filter_media_items(
-            catalog, genre, access, progress, section
-        )
-        items = page_items(items, page, count)
+        needs_detail_filter = bool(region or year or genre or sort)
+        if needs_detail_filter:
+            scan_limit = min(
+                len(catalog),
+                self._detail_limit,
+                max(count * page * 3, count),
+            )
+            candidates = self._enrich_items(mtype, catalog[:scan_limit])
+            items = filter_media_items(
+                candidates,
+                genre,
+                access,
+                progress,
+                section,
+                region,
+                year,
+                sort,
+            )
+            items = page_items(items, page, count)
+        else:
+            items = page_items(
+                filter_media_items(
+                    catalog, genre, access, progress, section
+                ),
+                page,
+                count,
+            )
+            items = self._enrich_items(mtype, items)
         media_type = "电影" if mtype == "movie" else "电视剧"
         return [
             schemas.MediaInfo(
@@ -399,6 +629,8 @@ class CustomYoukuVideoDiscover(_PluginBase):
                 mediaid_prefix="customyoukuvideo",
                 media_id=item["media_id"],
                 poster_path=item["poster"],
+                overview=media_overview(item),
+                release_date=item.get("release_date"),
             )
             for item in items
         ]
@@ -455,6 +687,20 @@ class CustomYoukuVideoDiscover(_PluginBase):
             for channel in CHANNEL_PARAMS
         )
         rows.extend([
+            self._filter_row(
+                "地区",
+                "region",
+                [(region, region) for region in REGION_OPTIONS],
+            ),
+            self._filter_row(
+                "年份",
+                "year",
+                [
+                    (str(year), str(year))
+                    for year in range(time.localtime().tm_year, 2009, -1)
+                ] + [("earlier", "更早")],
+            ),
+            self._filter_row("排序", "sort", list(SORT_OPTIONS)),
             self._filter_row("内容", "section", list(SECTION_OPTIONS)),
             self._filter_row(
                 "权益",
@@ -474,7 +720,10 @@ class CustomYoukuVideoDiscover(_PluginBase):
         if not self._enabled or not event or not event.event_data:
             return
         event_data: DiscoverSourceEventData = event.event_data
-        filter_names = ("genre", "access", "progress", "section")
+        filter_names = (
+            "genre", "region", "year", "sort",
+            "access", "progress", "section",
+        )
         source = schemas.DiscoverMediaSource(
             name="优酷视频（自用版）",
             mediaid_prefix="customyoukuvideo",
