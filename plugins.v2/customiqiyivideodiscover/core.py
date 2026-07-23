@@ -33,17 +33,22 @@ REGION_OPTIONS = {
 
 GENRE_OPTIONS = {
     "movie": (("8", "喜剧"), ("6", "爱情"), ("11", "动作"),
-              ("291", "犯罪"), ("289", "悬疑"), ("9", "科幻"),
-              ("7", "战争"), ("10", "恐怖"), ("12", "动画"),
-              ("1284", "奇幻")),
-    "tv": (("24", "古装"), ("20", "言情"), ("23", "武侠"),
-           ("1654", "家庭"), ("24064", "都市"), ("135", "喜剧"),
-           ("290", "谍战"), ("32", "悬疑"), ("149", "罪案"),
-           ("34", "科幻"), ("24063", "剧情"), ("27881", "奇幻")),
-    "variety": (("156", "访谈"), ("292", "晚会"), ("2118", "脱口秀"),
+              ("131", "枪战"), ("291", "犯罪"), ("128", "惊悚"),
+              ("289", "悬疑"), ("10", "恐怖"), ("12", "动画"),
+              ("27356", "家庭"), ("1284", "奇幻"), ("129", "魔幻"),
+              ("9", "科幻"), ("7", "战争"), ("130", "青春")),
+    "tv": (("11992", "自制"), ("24", "古装"), ("20", "言情"),
+           ("23", "武侠"), ("30", "偶像"), ("1654", "家庭"),
+           ("1653", "青春"), ("24064", "都市"), ("135", "喜剧"),
+           ("27916", "战争"), ("1655", "军旅"), ("290", "谍战"),
+           ("32", "悬疑"), ("149", "罪案"), ("148", "穿越"),
+           ("139", "宫廷"), ("21", "历史"), ("145", "神话"),
+           ("34", "科幻"), ("27", "年代"), ("24063", "剧情"),
+           ("27881", "奇幻"), ("24065", "网剧"), ("32839", "竖短片")),
+    "variety": (("155", "播报"), ("156", "访谈"), ("158", "游戏"),
+                ("292", "晚会"), ("293", "曲艺"), ("2118", "脱口秀"),
                 ("2224", "真人秀"), ("30278", "竞技"),
-                ("33163", "音乐"), ("33182", "美食"),
-                ("33317", "搞笑"), ("33197", "亲子")),
+                ("30279", "爱奇艺出品"), ("33860", "竞演")),
     "anime": (("30230", "搞笑"), ("30232", "热血"), ("30234", "治愈"),
               ("30243", "恋爱"), ("30245", "科幻"), ("30247", "奇幻"),
               ("30248", "推理"), ("30249", "校园"), ("30267", "冒险"),
@@ -54,6 +59,45 @@ GENRE_OPTIONS = {
                     ("73", "探险"), ("71", "社会"), ("28119", "科技"),
                     ("310", "旅游")),
     "children": (),
+}
+
+# Every value below is sent through ``three_category_id``.  They are kept in
+# separate UI rows because iQIYI groups them by different parent categories.
+EXTRA_FILTER_OPTIONS = {
+    "movie": {
+        "specification": ("规格", (("27397", "巨制"), ("27815", "院线"),
+                                  ("30149", "独播"), ("27401", "网络电影"))),
+    },
+    "tv": {},
+    "variety": {
+        "theme": ("题材", (("33163", "音乐"), ("33172", "舞蹈"),
+                           ("33173", "文化"), ("33182", "美食"),
+                           ("33193", "相亲"), ("33195", "纪实"),
+                           ("33196", "生活"), ("33197", "亲子"),
+                           ("33316", "爱情"), ("33317", "搞笑"),
+                           ("33318", "益智"), ("33319", "职场"))),
+    },
+    "anime": {
+        "version": ("版本", (("30220", "动画"), ("30223", "特摄"),
+                             ("30224", "布袋戏"), ("32782", "特别篇"),
+                             ("32783", "动态漫画"), ("32784", "动画电影"),
+                             ("33482", "轻动画"), ("33483", "短剧"))),
+        "adaptation": ("来源", (("32796", "轻小说改编"),
+                                ("32797", "漫画改编"),
+                                ("32798", "游戏改编"), ("32799", "原创"))),
+    },
+    "documentary": {
+        "producer": ("出品方", (("28468", "BBC"), ("28470", "美国历史频道"),
+                                ("28471", "探索频道"), ("28472", "央视记录"),
+                                ("28473", "北京纪实频道"),
+                                ("28474", "上海纪实频道"), ("28480", "NHK"),
+                                ("31283", "爱奇艺出品"), ("31286", "Netflix"))),
+        "subtype": ("片种", (("29077", "纪录电影"), ("29078", "系列纪录片"),
+                              ("29082", "网络纪录片"), ("29083", "纪实栏目"))),
+        "duration": ("时长", (("29079", "微纪录"), ("29080", "长纪录"),
+                               ("29081", "短纪录"))),
+    },
+    "children": {},
 }
 
 
@@ -72,6 +116,30 @@ def normalize_url(value: Any) -> str:
     if text.startswith("http://"):
         return f"https://{text[7:]}"
     return text
+
+
+def high_resolution_poster(value: Any, sizes: Any = None) -> str:
+    """Select a real portrait rendition instead of iQIYI's 120x160 default."""
+    url = normalize_url(value)
+    if not url:
+        return url
+    available = {str(size) for size in sizes} if isinstance(sizes, list) else set()
+    preferred = next(
+        (size for size in ("579_772", "390_520", "318_424", "260_360")
+         if not available or size in available),
+        None,
+    )
+    if not preferred:
+        return url
+    if re.search(r"_\d+_\d+(?=\.(?:jpe?g|webp|avif)(?:\?|$))", url, re.I):
+        return re.sub(
+            r"_\d+_\d+(?=\.(?:jpe?g|webp|avif)(?:\?|$))",
+            f"_{preferred}", url, count=1, flags=re.I,
+        )
+    return re.sub(
+        r"\.(jpe?g|webp|avif)(?=\?|$)", rf"_{preferred}.\1", url, count=1,
+        flags=re.I,
+    )
 
 
 def _names(value: Any) -> Tuple[str, ...]:
@@ -122,7 +190,7 @@ def normalize_item(item: Any, expected_channel: Optional[str] = None) -> Dict[st
         "media_id": media_id,
         "title": title,
         "channel_id": channel_id,
-        "poster": normalize_url(item.get("imageUrl")),
+        "poster": high_resolution_poster(item.get("imageUrl"), item.get("imageSize")),
         "play_url": normalize_url(item.get("playUrl") or item.get("url")),
         "description": str(item.get("description") or "").strip() or None,
         "focus": str(item.get("focus") or "").strip() or None,
@@ -175,8 +243,8 @@ def merge_detail(item: Dict[str, Any], detail: Optional[Dict[str, Any]]) -> Dict
     return merged
 
 
-def category_value(region: Optional[str], genre: Optional[str]) -> Optional[str]:
-    values = [str(value).strip() for value in (region, genre) if str(value or "").strip()]
+def category_value(*categories: Optional[str]) -> Optional[str]:
+    values = [str(value).strip() for value in categories if str(value or "").strip()]
     return ",".join(dict.fromkeys(values)) or None
 
 
@@ -193,6 +261,26 @@ def media_overview(item: Dict[str, Any], mtype: str) -> Optional[str]:
             parts.append(f"共{total}集")
     elif mtype in {"variety", "documentary"} and item.get("release_date"):
         parts.append(f"更新日期：{item['release_date']}")
+    labels = [*item.get("areas", ()), *item.get("categories", ())]
+    labels = list(dict.fromkeys(labels))[:8]
+    if labels:
+        parts.append("分类：" + " · ".join(labels))
+    rights = []
+    if item.get("produced"):
+        rights.append("爱奇艺自制")
+    if item.get("exclusive"):
+        rights.append("独播")
+    if item.get("pay_mark") == 1:
+        rights.append("VIP")
+    elif item.get("pay_mark") == 2:
+        rights.append("付费")
+    elif item.get("pay_mark") == 0:
+        rights.append("免费")
+    if rights:
+        parts.append("权益：" + " · ".join(rights))
+    actors = item.get("actors", ())
+    if actors:
+        parts.append("主演：" + "、".join(actors[:6]))
     for value in (item.get("focus"), item.get("description")):
         text = str(value or "").strip()
         if text and text not in parts:

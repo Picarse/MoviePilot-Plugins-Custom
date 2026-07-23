@@ -18,6 +18,7 @@ from app.schemas.types import ChainEventType
 from .core import (
     ACCESS_OPTIONS,
     CHANNEL_PARAMS,
+    EXTRA_FILTER_OPTIONS,
     GENRE_OPTIONS,
     REGION_OPTIONS,
     SORT_OPTIONS,
@@ -46,13 +47,17 @@ DEFAULT_DETAIL_LIMIT = 12
 MAX_DETAIL_LIMIT = 30
 DETAIL_WORKERS = 6
 IMAGE_DOMAINS = ("iqiyipic.com", "pic1.iqiyipic.com", "pic7.iqiyipic.com")
+CATEGORY_FILTER_NAMES = (
+    "region", "genre", "specification", "theme", "version",
+    "adaptation", "producer", "subtype", "duration",
+)
 
 
 class CustomIqiyiVideoDiscover(_PluginBase):
     plugin_name = "爱奇艺视频探索（自用版）"
     plugin_desc = "让探索支持爱奇艺视频的数据浏览。"
     plugin_icon = "https://www.iqiyi.com/favicon.ico"
-    plugin_version = "1.0.0"
+    plugin_version = "1.1.0"
     plugin_author = "Picarse"
     author_url = "https://github.com/Picarse"
     plugin_config_prefix = "customiqiyivideodiscover_"
@@ -114,7 +119,11 @@ class CustomIqiyiVideoDiscover(_PluginBase):
     @staticmethod
     def _fetch_page(mtype: str, page: int, count: int, mode: Optional[str],
                     year: Optional[str], access: Optional[str],
-                    region: Optional[str], genre: Optional[str]) -> Optional[List[Dict[str, Any]]]:
+                    region: Optional[str], genre: Optional[str],
+                    specification: Optional[str] = None, theme: Optional[str] = None,
+                    version: Optional[str] = None, adaptation: Optional[str] = None,
+                    producer: Optional[str] = None, subtype: Optional[str] = None,
+                    duration: Optional[str] = None) -> Optional[List[Dict[str, Any]]]:
         params = {
             "channel_id": CHANNEL_PARAMS[mtype]["Id"],
             "data_type": "1",
@@ -126,7 +135,10 @@ class CustomIqiyiVideoDiscover(_PluginBase):
             params["market_release_date_level"] = year
         if access not in (None, ""):
             params["is_purchase"] = access
-        category = category_value(region, genre)
+        category = category_value(
+            region, genre, specification, theme, version,
+            adaptation, producer, subtype, duration,
+        )
         if category:
             params["three_category_id"] = category
         try:
@@ -148,8 +160,15 @@ class CustomIqiyiVideoDiscover(_PluginBase):
     @cached(region="custom_iqiyivideo_page", ttl=1800, skip_none=True)
     def _request_page(self, mtype: str, page: int, count: int,
                       mode: Optional[str], year: Optional[str], access: Optional[str],
-                      region: Optional[str], genre: Optional[str]) -> Optional[List[Dict[str, Any]]]:
-        return self._fetch_page(mtype, page, count, mode, year, access, region, genre)
+                      region: Optional[str], genre: Optional[str],
+                      specification: Optional[str] = None, theme: Optional[str] = None,
+                      version: Optional[str] = None, adaptation: Optional[str] = None,
+                      producer: Optional[str] = None, subtype: Optional[str] = None,
+                      duration: Optional[str] = None) -> Optional[List[Dict[str, Any]]]:
+        return self._fetch_page(
+            mtype, page, count, mode, year, access, region, genre,
+            specification, theme, version, adaptation, producer, subtype, duration,
+        )
 
     @staticmethod
     def _fetch_detail(mtype: str, media_id: str) -> Optional[Dict[str, Any]]:
@@ -192,17 +211,33 @@ class CustomIqiyiVideoDiscover(_PluginBase):
     def iqiyivideo_discover(self, mtype: str = "tv", mode: Optional[str] = None,
                             year: Optional[str] = None, access: Optional[str] = None,
                             region: Optional[str] = None, genre: Optional[str] = None,
+                            specification: Optional[str] = None,
+                            theme: Optional[str] = None, version: Optional[str] = None,
+                            adaptation: Optional[str] = None,
+                            producer: Optional[str] = None,
+                            subtype: Optional[str] = None,
+                            duration: Optional[str] = None,
                             page: int = 1, count: int = 10) -> List[schemas.MediaInfo]:
         if not self._enabled or mtype not in CHANNEL_PARAMS:
             return []
         page = clamp_positive_int(page, 1, 1000)
         count = clamp_positive_int(count, 10, MAX_PAGE_SIZE)
-        allowed_regions = {value for value, _label in REGION_OPTIONS[mtype]}
-        allowed_genres = {value for value, _label in GENRE_OPTIONS[mtype]}
-        region = region if region in allowed_regions else None
-        genre = genre if genre in allowed_genres else None
+        supplied = locals()
+        allowed = {
+            "region": {value for value, _label in REGION_OPTIONS[mtype]},
+            "genre": {value for value, _label in GENRE_OPTIONS[mtype]},
+        }
+        allowed.update({
+            name: {value for value, _label in options}
+            for name, (_label, options) in EXTRA_FILTER_OPTIONS[mtype].items()
+        })
+        category_filters = {
+            name: supplied.get(name) if supplied.get(name) in allowed.get(name, set()) else None
+            for name in CATEGORY_FILTER_NAMES
+        }
         items = self._enrich_items(mtype, self._request_page(
-            mtype, page, count, mode, year, access, region, genre
+            mtype, page, count, mode, year, access,
+            *(category_filters[name] for name in CATEGORY_FILTER_NAMES),
         ) or [])
         media_type = "电影" if mtype == "movie" else "电视剧"
         return [schemas.MediaInfo(
@@ -243,6 +278,8 @@ class CustomIqiyiVideoDiscover(_PluginBase):
                 rows.append(self._filter_row("地区", "region", REGION_OPTIONS[channel], show))
             if GENRE_OPTIONS[channel]:
                 rows.append(self._filter_row("题材", "genre", GENRE_OPTIONS[channel], show))
+            for model, (label, options) in EXTRA_FILTER_OPTIONS[channel].items():
+                rows.append(self._filter_row(label, model, options, show))
         rows.extend([
             self._filter_row("排序", "mode", SORT_OPTIONS),
             self._filter_row("年份", "year", (
@@ -258,7 +295,7 @@ class CustomIqiyiVideoDiscover(_PluginBase):
         if not self._enabled or not event or not event.event_data:
             return
         event_data: DiscoverSourceEventData = event.event_data
-        names = ("mode", "year", "access", "region", "genre")
+        names = ("mode", "year", "access", *CATEGORY_FILTER_NAMES)
         source = schemas.DiscoverMediaSource(
             name="爱奇艺视频（自用版）",
             mediaid_prefix="customiqiyivideo",

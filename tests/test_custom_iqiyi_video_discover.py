@@ -37,12 +37,22 @@ class CustomIqiyiVideoCoreTest(unittest.TestCase):
         ]}}
         rows = CORE.extract_items(payload, "tv")
         self.assertEqual([row["media_id"] for row in rows], ["123"])
-        self.assertEqual(rows[0]["poster"], "https://pic1.iqiyipic.com/cover.jpg")
+        self.assertEqual(
+            rows[0]["poster"],
+            "https://pic1.iqiyipic.com/cover_579_772.jpg",
+        )
         self.assertEqual(rows[0]["year"], "2026")
         self.assertEqual(rows[0]["release_date"], "2026-07-23")
         self.assertEqual(rows[0]["categories"], ("悬疑", "内地"))
         self.assertEqual(rows[0]["score"], 8.6)
         self.assertEqual(CORE.extract_items({"code": "A00003"}, "tv"), [])
+        self.assertEqual(
+            CORE.high_resolution_poster(
+                "https://pic1.iqiyipic.com/cover_260_360.jpg",
+                ["260_360", "579_772"],
+            ),
+            "https://pic1.iqiyipic.com/cover_579_772.jpg",
+        )
 
     def test_detail_parses_dict_categories_areas_and_actors(self):
         payload = {"code": "A00000", "data": item(
@@ -64,7 +74,7 @@ class CustomIqiyiVideoCoreTest(unittest.TestCase):
         row = CORE.normalize_item(item(description="剧情简介"), "2")
         self.assertEqual(
             CORE.media_overview(row, "tv"),
-            "更新至12/共24集\n剧情简介",
+            "更新至12/共24集\n分类：悬疑 · 内地\n剧情简介",
         )
         documentary = CORE.normalize_item(item(channelId=3), "3")
         self.assertTrue(CORE.media_overview(documentary, "documentary").startswith(
@@ -87,6 +97,14 @@ class CustomIqiyiVideoCoreTest(unittest.TestCase):
         self.assertEqual(CORE.clamp_positive_int("bad", 10, 48), 10)
         self.assertIn(("32", "悬疑"), CORE.GENRE_OPTIONS["tv"])
         self.assertIn(("20323", "国内"), CORE.REGION_OPTIONS["documentary"])
+        self.assertIn(
+            ("27815", "院线"),
+            CORE.EXTRA_FILTER_OPTIONS["movie"]["specification"][1],
+        )
+        self.assertIn(
+            ("28468", "BBC"),
+            CORE.EXTRA_FILTER_OPTIONS["documentary"]["producer"][1],
+        )
         self.assertEqual(CORE.GENRE_OPTIONS["children"], ())
         self.assertEqual(CORE.REGION_OPTIONS["children"], ())
 
@@ -174,6 +192,17 @@ class CustomIqiyiVideoPluginTest(unittest.TestCase):
         self.assertNotIn("order", params)
         self.assertNotIn("area", params)
         self.assertNotIn("genre", params)
+
+        response.json.return_value = {
+            "code": "A00000", "data": {"list": [item(channelId=1)]}
+        }
+        module.CustomIqiyiVideoDiscover._fetch_page(
+            "movie", 1, 10, "11", None, None, "1", "8", "27815"
+        )
+        self.assertEqual(
+            requests_module.get.call_args.kwargs["params"]["three_category_id"],
+            "1,8,27815",
+        )
 
         response.json.return_value = {"code": "A00003", "data": {}}
         self.assertIsNone(module.CustomIqiyiVideoDiscover._fetch_page(
