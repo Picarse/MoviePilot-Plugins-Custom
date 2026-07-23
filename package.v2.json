@@ -11,5 +11,17 @@
       "v1.1.0": "增加空间不足补充删种、至少5个主种、辅种联动和全局仅预览模式",
       "v1.0.0": "基于官方 TorrentRemover v2.3 创建独立自用版本，默认动作为暂停"
     }
+  },
+  "CustomSiteRefresh": {
+    "name": "站点自动更新（自用版）",
+    "description": "使用浏览器模拟登录站点获取Cookie和UA。",
+    "labels": "站点",
+    "version": "1.2.0",
+    "icon": "Chrome_A.png",
+    "author": "thsrite, Picarse",
+    "level": 2,
+    "history": {
+      "v1.2.0": "基于官方 SiteRefresh v1.2 创建独立自用版本"
+    }
   }
 }

@@ -14,6 +14,15 @@
 
 自用版采用独立插件 ID 和配置前缀，可与官方版同时安装，官方插件升级不会覆盖本插件。
 
+## 站点自动更新（自用版）
+
+- 插件 ID：`CustomSiteRefresh`
+- 源码基础：MoviePilot 官方 `SiteRefresh` v1.2
+- 功能：站点签到检测到 Cookie 失效时，使用配置的账号模拟登录并更新 Cookie 和 UA
+- 配置格式：每行 `域名|用户名|密码`，可在末尾追加二次验证秘钥
+
+自用版采用独立插件 ID 和配置前缀，可与官方版同时安装，方便后续单独检查和修改。
+
 ## 添加插件库
 
 在 MoviePilot V2 的插件市场设置中添加以下仓库：
@@ -22,7 +31,7 @@
 https://github.com/Picarse/MoviePilot-Plugins-Custom
 ```
 
-刷新插件市场后，搜索“自动删种（自用版）”。
+刷新插件市场后，搜索“自动删种（自用版）”或“站点自动更新（自用版）”。
 
 ## 安全测试建议
 
@@ -37,4 +46,4 @@ https://github.com/Picarse/MoviePilot-Plugins-Custom
 
 ## 来源与许可
 
-本插件基于 [jxxghp/MoviePilot-Plugins](https://github.com/jxxghp/MoviePilot-Plugins) 中的 `TorrentRemover` 修改，保留原作者信息，并按照 GNU GPL v3 许可证发布。详见 [LICENSE](LICENSE)。
+本仓库插件基于 [jxxghp/MoviePilot-Plugins](https://github.com/jxxghp/MoviePilot-Plugins) 中对应的官方插件修改，保留原作者信息，并按照 GNU GPL v3 许可证发布。详见 [LICENSE](LICENSE)。
