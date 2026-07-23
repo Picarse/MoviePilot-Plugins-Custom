@@ -57,15 +57,15 @@
 
 - 插件 ID：`CustomIqiyiVideoDiscover`
 - 数据来源：爱奇艺公开的匿名 PC Web 目录/节目详情接口，以及 App/网页共享的匿名 Mesh 频道接口；均不依赖账号、Cookie、设备 ID 或私有签名
-- 功能：向 MoviePilot“探索”注册爱奇艺数据源，支持电视剧、电影、综艺、动漫、少儿和纪录片六个真实频道，以及热播、好评、新上线、年份和资费筛选
-- App 频道：电视剧、电影、综艺、动漫和少儿可切换到 App 首页数据，浏览焦点、热门推荐、更新日历及热播、飙升、免费、必看、高分等频道真实榜单；App 数据按频道缓存并在本地分页
-- 分类筛选：电影、电视剧、综艺、动漫和纪录片提供经真实请求验证的分频道地区与题材 ID，并扩展电影规格、综艺题材、动漫版本和改编来源，以及纪录片出品方、片种和时长；多条件由服务端求交集
+- 功能：向 MoviePilot“探索”注册爱奇艺数据源，支持电视剧、电影、综艺、动漫、少儿和纪录片六个真实频道，以及热度、好评、最新、年份、免费和爱奇艺出品筛选
+- App 频道：作为电视剧默认来源，参照爱奇艺 App 按类型、地区、时间、资费、殿堂、规格、奖项、剧场、演员、推荐和排序组织筛选；电影、综艺、动漫和少儿继续提供焦点、推荐、更新日历及真实榜单
+- 分类筛选：电影、电视剧、综艺、动漫和纪录片提供经真实请求验证的分频道地区与类型 ID，并扩展电视剧形式、电影规格、综艺题材、动漫版本和改编来源，以及纪录片出品方、片种和时长；多条件由服务端求交集
 - 高清海报：根据接口声明的可用尺寸选择真实 `579×772` 竖版图，替代目录默认的 `120×160` 缩略图；不对低清图片做本地拉伸
 - 详情增强：当前页按需补全准确分类、地区、演员、权益、简介、评分、上映/更新日期及集数，并在卡片简介中展示，默认最多 12 条、可配置为 1–30 条
 - 可靠性：列表缓存 30 分钟、详情缓存 6 小时、最多 6 个并发详情请求；详情失败时保留目录卡片，列表失败时返回空结果而不串用其他频道
 - 独立性：使用独立插件 ID、配置前缀、API 路径、缓存区域和媒体 ID 前缀
 
-`mesh.if.iqiyi.com/portal/lw/v7/channel/{tv|film|variety|cartoon|child}` 已实测可匿名返回完整的 App 风格频道数据；该服务也带有 PC Web 标记，因此不声称它是 iOS 独占接口。数字频道路径及 `movie/anime/children/documentary` 等直译路径会返回 404。纪录片没有对应的已验证 App 路径，`knowledge` 是知识频道而非纪录片，因此纪录片继续使用 PC Web 目录。PC Web 目录只使用实测生效的 `mode`、`market_release_date_level`、`is_purchase` 和 `three_category_id`；`order/year/area/genre` 会被服务端忽略，未在插件中伪装成有效筛选。详细研究记录见 [`docs/iqiyi-ios-app-api.md`](docs/iqiyi-ios-app-api.md)。
+`mesh.if.iqiyi.com/portal/lw/v7/channel/{tv|film|variety|cartoon|child}` 已实测可匿名返回完整的 App 风格频道数据；该服务也带有 PC Web 标记，因此不声称它是 iOS 独占接口。电视剧还会合并 `?page=2` 瀑布流里的 `tag`、`tag3lines`、`starring/contributor/actor`、`theaters` 和 `awards`，同节目卡片会合并元数据及所属榜单后再去重。殿堂依次映射获奖节目、N 刷榜、热播榜和高分榜，所有选项都会实际改变结果。电视剧入口及筛选中均不提供中剧、短剧、短剧场或竖短片。数字频道路径及 `movie/anime/children/documentary` 等直译路径会返回 404。纪录片没有对应的已验证 App 路径，`knowledge` 是知识频道而非纪录片，因此纪录片继续使用 PC Web 目录。PC Web 目录只使用实测生效的 `mode`、`market_release_date_level`、`is_purchase=0`、`is_qiyi_produced` 和 `three_category_id`；未在插件中提供会被服务端忽略的会员、付费或伪独播参数。详细研究记录见 [`docs/iqiyi-ios-app-api.md`](docs/iqiyi-ios-app-api.md)。
 
 ## 添加插件库
 

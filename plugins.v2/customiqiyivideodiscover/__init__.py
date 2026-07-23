@@ -19,10 +19,21 @@ from .core import (
     ACCESS_OPTIONS,
     APP_CHANNEL_PATHS,
     APP_SECTION_OPTIONS,
+    APP_TV_ACCESS_OPTIONS,
+    APP_TV_ACTOR_OPTIONS,
+    APP_TV_AWARD_OPTIONS,
+    APP_TV_GENRE_OPTIONS,
+    APP_TV_HALL_OPTIONS,
+    APP_TV_RECOMMEND_OPTIONS,
+    APP_TV_REGION_OPTIONS,
+    APP_TV_SORT_OPTIONS,
+    APP_TV_SPECIFICATION_OPTIONS,
+    APP_TV_THEATER_OPTIONS,
     CATALOG_OPTIONS,
     CHANNEL_PARAMS,
     EXTRA_FILTER_OPTIONS,
     GENRE_OPTIONS,
+    PRODUCTION_OPTIONS,
     REGION_OPTIONS,
     SORT_OPTIONS,
     category_value,
@@ -30,7 +41,9 @@ from .core import (
     extract_detail,
     extract_app_items,
     extract_items,
+    filter_app_tv_items,
     media_overview,
+    merge_app_item,
     merge_detail,
 )
 
@@ -54,7 +67,7 @@ DETAIL_WORKERS = 6
 IMAGE_DOMAINS = ("iqiyipic.com", *(f"pic{index}.iqiyipic.com" for index in range(10)))
 CATEGORY_FILTER_NAMES = (
     "region", "genre", "specification", "theme", "version",
-    "adaptation", "producer", "subtype", "duration",
+    "adaptation", "producer", "subtype", "duration", "format",
 )
 
 
@@ -62,7 +75,7 @@ class CustomIqiyiVideoDiscover(_PluginBase):
     plugin_name = "爱奇艺视频探索（自用版）"
     plugin_desc = "让探索支持爱奇艺视频的数据浏览。"
     plugin_icon = "https://www.iqiyi.com/favicon.ico"
-    plugin_version = "1.2.0"
+    plugin_version = "1.3.0"
     plugin_author = "Picarse"
     author_url = "https://github.com/Picarse"
     plugin_config_prefix = "customiqiyivideodiscover_"
@@ -128,7 +141,8 @@ class CustomIqiyiVideoDiscover(_PluginBase):
                     specification: Optional[str] = None, theme: Optional[str] = None,
                     version: Optional[str] = None, adaptation: Optional[str] = None,
                     producer: Optional[str] = None, subtype: Optional[str] = None,
-                    duration: Optional[str] = None) -> Optional[List[Dict[str, Any]]]:
+                    duration: Optional[str] = None, format: Optional[str] = None,
+                    production: Optional[str] = None) -> Optional[List[Dict[str, Any]]]:
         params = {
             "channel_id": CHANNEL_PARAMS[mtype]["Id"],
             "data_type": "1",
@@ -140,9 +154,11 @@ class CustomIqiyiVideoDiscover(_PluginBase):
             params["market_release_date_level"] = year
         if access not in (None, ""):
             params["is_purchase"] = access
+        if production in {"0", "1"}:
+            params["is_qiyi_produced"] = production
         category = category_value(
             region, genre, specification, theme, version,
-            adaptation, producer, subtype, duration,
+            adaptation, producer, subtype, duration, format,
         )
         if category:
             params["three_category_id"] = category
@@ -169,10 +185,12 @@ class CustomIqiyiVideoDiscover(_PluginBase):
                       specification: Optional[str] = None, theme: Optional[str] = None,
                       version: Optional[str] = None, adaptation: Optional[str] = None,
                       producer: Optional[str] = None, subtype: Optional[str] = None,
-                      duration: Optional[str] = None) -> Optional[List[Dict[str, Any]]]:
+                      duration: Optional[str] = None, format: Optional[str] = None,
+                      production: Optional[str] = None) -> Optional[List[Dict[str, Any]]]:
         return self._fetch_page(
             mtype, page, count, mode, year, access, region, genre,
             specification, theme, version, adaptation, producer, subtype, duration,
+            format, production,
         )
 
     @staticmethod
@@ -195,13 +213,14 @@ class CustomIqiyiVideoDiscover(_PluginBase):
         return self._fetch_detail(mtype, media_id)
 
     @staticmethod
-    def _fetch_app_payload(mtype: str) -> Optional[Dict[str, Any]]:
+    def _fetch_app_payload(mtype: str, page: int = 1) -> Optional[Dict[str, Any]]:
         channel = APP_CHANNEL_PATHS.get(mtype)
         if not channel:
             return None
         try:
             response = requests.get(
                 APP_CHANNEL_API.format(channel=channel),
+                params={"page": page} if page > 1 else None,
                 headers=API_HEADERS,
                 timeout=REQUEST_TIMEOUT,
             )
@@ -212,14 +231,14 @@ class CustomIqiyiVideoDiscover(_PluginBase):
             return payload
         except (requests.RequestException, TypeError, ValueError) as error:
             logger.warning(
-                f"爱奇艺 App 频道请求失败：频道={mtype}，"
+                f"爱奇艺 App 频道请求失败：频道={mtype}，页码={page}，"
                 f"错误类型={type(error).__name__}"
             )
             return None
 
     @cached(region="custom_iqiyivideo_app_channel", ttl=1800, skip_none=True)
-    def _request_app_payload(self, mtype: str) -> Optional[Dict[str, Any]]:
-        return self._fetch_app_payload(mtype)
+    def _request_app_payload(self, mtype: str, page: int = 1) -> Optional[Dict[str, Any]]:
+        return self._fetch_app_payload(mtype, page)
 
     def _enrich_items(self, mtype: str, items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         bounded = items[:self._detail_limit]
@@ -240,7 +259,7 @@ class CustomIqiyiVideoDiscover(_PluginBase):
         enriched = [merge_detail(item, details.get(item["media_id"])) for item in bounded]
         return [*enriched, *items[len(bounded):]]
 
-    def iqiyivideo_discover(self, mtype: str = "tv", catalog: str = "web",
+    def iqiyivideo_discover(self, mtype: str = "tv", catalog: str = "app",
                             section: Optional[str] = None, mode: Optional[str] = None,
                             year: Optional[str] = None, access: Optional[str] = None,
                             region: Optional[str] = None, genre: Optional[str] = None,
@@ -250,6 +269,13 @@ class CustomIqiyiVideoDiscover(_PluginBase):
                             producer: Optional[str] = None,
                             subtype: Optional[str] = None,
                             duration: Optional[str] = None,
+                            format: Optional[str] = None,
+                            production: Optional[str] = None,
+                            hall: Optional[str] = None,
+                            theater: Optional[str] = None,
+                            award: Optional[str] = None,
+                            actor: Optional[str] = None,
+                            recommendation: Optional[str] = None,
                             page: int = 1, count: int = 10) -> List[schemas.MediaInfo]:
         if not self._enabled or mtype not in CHANNEL_PARAMS:
             return []
@@ -258,9 +284,47 @@ class CustomIqiyiVideoDiscover(_PluginBase):
         if catalog == "app" and mtype in APP_CHANNEL_PATHS:
             allowed_sections = {value for value, _label in APP_SECTION_OPTIONS[mtype]}
             selected_section = section if section in allowed_sections else "all"
-            items = extract_app_items(
-                self._request_app_payload(mtype), mtype, selected_section
-            )
+            items = []
+            indexes = {}
+            app_pages = (1, 2) if mtype == "tv" else (1,)
+            for app_page in app_pages:
+                for item in extract_app_items(
+                    self._request_app_payload(mtype, app_page), mtype, selected_section
+                ):
+                    index = indexes.get(item["media_id"])
+                    if index is None:
+                        indexes[item["media_id"]] = len(items)
+                        items.append(item)
+                    else:
+                        items[index] = merge_app_item(items[index], item)
+            if mtype == "tv":
+                allowed_app = {
+                    "region": {value for value, _label in APP_TV_REGION_OPTIONS},
+                    "genre": {value for value, _label in APP_TV_GENRE_OPTIONS},
+                    "access": {value for value, _label in APP_TV_ACCESS_OPTIONS},
+                    "hall": {value for value, _label in APP_TV_HALL_OPTIONS},
+                    "specification": {
+                        value for value, _label in APP_TV_SPECIFICATION_OPTIONS
+                    },
+                    "mode": {value for value, _label in APP_TV_SORT_OPTIONS},
+                    "theater": {value for value, _label in APP_TV_THEATER_OPTIONS},
+                    "award": {value for value, _label in APP_TV_AWARD_OPTIONS},
+                    "actor": {value for value, _label in APP_TV_ACTOR_OPTIONS},
+                    "recommendation": {
+                        value for value, _label in APP_TV_RECOMMEND_OPTIONS
+                    },
+                }
+                selected = {
+                    name: value if value in allowed_app[name] else None
+                    for name, value in {
+                        "region": region, "genre": genre, "access": access,
+                        "hall": hall, "specification": specification,
+                        "mode": mode, "theater": theater, "award": award,
+                        "actor": actor, "recommendation": recommendation,
+                    }.items()
+                }
+                selected_year = year if year == "upcoming" or str(year or "").isdigit() else None
+                items = filter_app_tv_items(items, year=selected_year, **selected)
             start = (page - 1) * count
             items = items[start:start + count]
         else:
@@ -278,9 +342,17 @@ class CustomIqiyiVideoDiscover(_PluginBase):
                 name: supplied.get(name) if supplied.get(name) in allowed.get(name, set()) else None
                 for name in CATEGORY_FILTER_NAMES
             }
+            selected_mode = mode if mode in {value for value, _label in SORT_OPTIONS} else None
+            selected_access = access if access in {value for value, _label in ACCESS_OPTIONS} else None
+            selected_production = (
+                production if mtype == "tv"
+                and production in {value for value, _label in PRODUCTION_OPTIONS}
+                else None
+            )
             items = self._enrich_items(mtype, self._request_page(
-                mtype, page, count, mode, year, access,
+                mtype, page, count, selected_mode, year, selected_access,
                 *(category_filters[name] for name in CATEGORY_FILTER_NAMES),
+                selected_production,
             ) or [])
         media_type = "电影" if mtype == "movie" else "电视剧"
         return [schemas.MediaInfo(
@@ -312,32 +384,69 @@ class CustomIqiyiVideoDiscover(_PluginBase):
         ]}
 
     def iqiyivideo_filter_ui(self) -> List[dict]:
+        current_year = time.localtime().tm_year
         rows = [self._filter_row(
             "种类", "mtype", ((key, value["Name"]) for key, value in CHANNEL_PARAMS.items())
         )]
         rows.append(self._filter_row(
             "来源", "catalog", CATALOG_OPTIONS, "{{mtype != 'documentary'}}"
         ))
+        app_tv_show = "{{catalog == 'app' && mtype == 'tv'}}"
+        rows.extend([
+            self._filter_row("类型", "genre", APP_TV_GENRE_OPTIONS, app_tv_show),
+            self._filter_row("地区", "region", APP_TV_REGION_OPTIONS, app_tv_show),
+            self._filter_row("时间", "year", (
+                (("upcoming", "即将上线"),)
+                + tuple((str(value), str(value)) for value in range(current_year, 2009, -1))
+            ), app_tv_show),
+            self._filter_row("资费", "access", APP_TV_ACCESS_OPTIONS, app_tv_show),
+            self._filter_row("殿堂", "hall", APP_TV_HALL_OPTIONS, app_tv_show),
+            self._filter_row(
+                "规格", "specification", APP_TV_SPECIFICATION_OPTIONS, app_tv_show
+            ),
+            self._filter_row("奖项", "award", APP_TV_AWARD_OPTIONS, app_tv_show),
+            self._filter_row("剧场", "theater", APP_TV_THEATER_OPTIONS, app_tv_show),
+            self._filter_row("演员", "actor", APP_TV_ACTOR_OPTIONS, app_tv_show),
+            self._filter_row(
+                "推荐", "recommendation", APP_TV_RECOMMEND_OPTIONS, app_tv_show
+            ),
+            self._filter_row("排序", "mode", APP_TV_SORT_OPTIONS, app_tv_show),
+        ])
         for channel, options in APP_SECTION_OPTIONS.items():
+            if channel == "tv":
+                continue
             rows.append(self._filter_row(
-                "App栏目", "section", options,
+                "栏目", "section", options,
                 "{{catalog == 'app' && mtype == '" + channel + "'}}",
             ))
         for channel in CHANNEL_PARAMS:
-            show = "{{catalog != 'app' && mtype == '" + channel + "'}}"
+            show = (
+                "{{(catalog != 'app' || mtype == 'documentary') && mtype == '"
+                + channel + "'}}"
+            )
             if REGION_OPTIONS[channel]:
                 rows.append(self._filter_row("地区", "region", REGION_OPTIONS[channel], show))
             if GENRE_OPTIONS[channel]:
-                rows.append(self._filter_row("题材", "genre", GENRE_OPTIONS[channel], show))
+                rows.append(self._filter_row("类型", "genre", GENRE_OPTIONS[channel], show))
             for model, (label, options) in EXTRA_FILTER_OPTIONS[channel].items():
                 rows.append(self._filter_row(label, model, options, show))
         rows.extend([
-            self._filter_row("排序", "mode", SORT_OPTIONS, "{{catalog != 'app'}}"),
             self._filter_row("年份", "year", (
-                (str(value), str(value))
-                for value in range(time.localtime().tm_year, 2009, -1)
-            ), "{{catalog != 'app'}}"),
-            self._filter_row("资费", "access", ACCESS_OPTIONS, "{{catalog != 'app'}}"),
+                (("即将上线", "即将上线"),)
+                + tuple((str(value), str(value)) for value in range(current_year, 2009, -1))
+            ), "{{catalog != 'app' || mtype == 'documentary'}}"),
+            self._filter_row(
+                "权益", "access", ACCESS_OPTIONS,
+                "{{catalog != 'app' || mtype == 'documentary'}}",
+            ),
+            self._filter_row(
+                "制作", "production", PRODUCTION_OPTIONS,
+                "{{catalog != 'app' && mtype == 'tv'}}",
+            ),
+            self._filter_row(
+                "排序", "mode", SORT_OPTIONS,
+                "{{catalog != 'app' || mtype == 'documentary'}}",
+            ),
         ])
         return rows
 
@@ -346,18 +455,25 @@ class CustomIqiyiVideoDiscover(_PluginBase):
         if not self._enabled or not event or not event.event_data:
             return
         event_data: DiscoverSourceEventData = event.event_data
-        names = ("catalog", "section", "mode", "year", "access", *CATEGORY_FILTER_NAMES)
+        names = (
+            "catalog", "section", "mode", "year", "access", "production",
+            "hall", "theater", "award", "actor", "recommendation",
+            *CATEGORY_FILTER_NAMES,
+        )
         source = schemas.DiscoverMediaSource(
             name="爱奇艺视频（自用版）",
             mediaid_prefix="customiqiyivideo",
             api_path=("plugin/CustomIqiyiVideoDiscover/iqiyivideo_discover"
                       f"?apikey={settings.API_TOKEN}"),
             filter_params={
-                "mtype": "tv", "catalog": "web",
+                "mtype": "tv", "catalog": "app",
                 **{name: None for name in names if name != "catalog"},
             },
             filter_ui=self.iqiyivideo_filter_ui(),
-            depends={name: ["mtype"] for name in names},
+            depends={
+                name: (["mtype"] if name == "catalog" else ["mtype", "catalog"])
+                for name in names
+            },
         )
         if event_data.extra_sources is None:
             event_data.extra_sources = []

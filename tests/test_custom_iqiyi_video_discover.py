@@ -144,6 +144,79 @@ class CustomIqiyiVideoCoreTest(unittest.TestCase):
         self.assertEqual(movie["release_date"], "2026-07-23")
         self.assertEqual(CORE.extract_app_items({"code": 1}, "anime"), [])
 
+    def test_app_tv_card_metadata_and_screenshot_style_filters(self):
+        rows = [CORE.normalize_app_item(app_item(
+            channel_id=2,
+            tag="内地;悬疑;文学改编;自制",
+            cornerMark="exclusive",
+            pay_mark="NONE_MARK",
+            starring=[{"name": "张凌赫"}],
+            theaters=[{"title": "迷雾剧场"}],
+            awards=[{"title": "白玉兰奖"}],
+            tag3lines=[{"text": "豆瓣高分"}, {"text": "近1月转免"}],
+        ), "2", "waterfall", "猜你喜欢")]
+        row = rows[0]
+        self.assertEqual(row["categories"], ("内地", "悬疑", "文学改编", "自制"))
+        self.assertTrue(row["exclusive"])
+        self.assertTrue(row["produced"])
+        self.assertEqual(row["theaters"], ("迷雾剧场",))
+        self.assertEqual(row["awards"], ("白玉兰奖",))
+        self.assertEqual(row["actors"], ("张凌赫",))
+        self.assertEqual(row["card_labels"], ("豆瓣高分", "近1月转免"))
+        filtered = CORE.filter_app_tv_items(
+            rows, region="内地", genre="悬疑", access="recent_free",
+            hall="honor", specification="exclusive", theater="迷雾剧场",
+            award="白玉兰奖", actor="张凌赫", recommendation="douban_high",
+        )
+        self.assertEqual([item["media_id"] for item in filtered], ["987"])
+        self.assertEqual(CORE.filter_app_tv_items(rows, region="美国"), [])
+
+        merged = CORE.merge_app_item(
+            rows[0],
+            CORE.normalize_app_item(app_item(
+                channel_id=2, tag="内地;悬疑",
+                tag3lines=[{"text": "最高热度破万"}, {"text": "金鹰奖"}],
+            ), "2", "waterfall", "猜你喜欢"),
+        )
+        self.assertIn("最高热度破万", merged["card_labels"])
+        self.assertEqual(
+            len(CORE.filter_app_tv_items([merged], recommendation="heat_10000")), 1
+        )
+
+        popular = CORE.merge_app_item(
+            rows[0],
+            CORE.normalize_app_item(
+                app_item(channel_id=2), "2", "rank_list_1", "热播榜"
+            ),
+        )
+        self.assertEqual(
+            len(CORE.filter_app_tv_items([popular], hall="popular")), 1
+        )
+
+    def test_app_tv_year_and_sort_filters(self):
+        rows = [
+            CORE.normalize_app_item(app_item(
+                album_id=1, channel_id=2, display_name="待播剧",
+                dq_updatestatus="即将上线", hot_score=20,
+                date={"year": 2027, "month": 1, "day": 1},
+            ), "2", "online", "网剧热播"),
+            CORE.normalize_app_item(app_item(
+                album_id=2, channel_id=2, display_name="高分剧",
+                sns_score="9.6", hot_score=10,
+                date={"year": 2026, "month": 2, "day": 1},
+            ), "2", "online", "网剧热播"),
+        ]
+        self.assertEqual(
+            [item["media_id"] for item in CORE.filter_app_tv_items(
+                rows, year="upcoming"
+            )], ["1"],
+        )
+        self.assertEqual(
+            [item["media_id"] for item in CORE.filter_app_tv_items(
+                rows, mode="score"
+            )], ["2", "1"],
+        )
+
     def test_clamp_and_verified_filter_tables(self):
         self.assertEqual(CORE.clamp_positive_int("0", 10, 48), 1)
         self.assertEqual(CORE.clamp_positive_int("99", 10, 48), 48)
@@ -257,6 +330,14 @@ class CustomIqiyiVideoPluginTest(unittest.TestCase):
             "1,8,27815",
         )
 
+        module.CustomIqiyiVideoDiscover._fetch_page(
+            "tv", 1, 10, "11", None, "0", None, None,
+            format="24065", production="1",
+        )
+        params = requests_module.get.call_args.kwargs["params"]
+        self.assertEqual(params["three_category_id"], "24065")
+        self.assertEqual(params["is_qiyi_produced"], "1")
+
         response.json.return_value = {"code": "A00003", "data": {}}
         self.assertIsNone(module.CustomIqiyiVideoDiscover._fetch_page(
             "tv", 1, 10, None, None, None, None, None
@@ -292,6 +373,9 @@ class CustomIqiyiVideoPluginTest(unittest.TestCase):
             requests_module.get.call_args.args[0],
             "https://mesh.if.iqiyi.com/portal/lw/v7/channel/cartoon",
         )
+        self.assertIsNone(requests_module.get.call_args.kwargs["params"])
+        module.CustomIqiyiVideoDiscover._fetch_app_payload("tv", 2)
+        self.assertEqual(requests_module.get.call_args.kwargs["params"], {"page": 2})
 
         plugin = module.CustomIqiyiVideoDiscover()
         plugin._enabled = True
@@ -302,6 +386,32 @@ class CustomIqiyiVideoPluginTest(unittest.TestCase):
         )
         self.assertEqual([row.media_id for row in rows], [str(index) for index in range(11, 16)])
         plugin._request_detail.assert_not_called()
+
+    def test_tv_app_filter_ui_matches_requested_dimensions(self):
+        module, _requests_module = load_plugin_module()
+        plugin = module.CustomIqiyiVideoDiscover()
+        rows = plugin.iqiyivideo_filter_ui()
+        app_tv_rows = {
+            row["content"][0]["content"][0]["text"]: row
+            for row in rows
+            if row.get("props", {}).get("show") == "{{catalog == 'app' && mtype == 'tv'}}"
+        }
+        self.assertTrue({
+            "类型", "地区", "时间", "资费", "殿堂", "规格",
+            "奖项", "剧场", "演员", "推荐", "排序",
+        }.issubset(app_tv_rows))
+        theater_text = [
+            chip["text"] for chip in app_tv_rows["剧场"]["content"][1]["content"]
+        ]
+        self.assertIn("迷雾剧场", theater_text)
+        self.assertIn("小逗剧场", theater_text)
+        self.assertNotIn("短剧场", theater_text)
+        actor_text = [
+            chip["text"] for chip in app_tv_rows["演员"]["content"][1]["content"]
+        ]
+        self.assertIn("张凌赫", actor_text)
+        self.assertIn("杨志刚", actor_text)
+        self.assertNotIn("栏目", app_tv_rows)
 
     def test_manifest_version_matches_plugin(self):
         module, _requests_module = load_plugin_module()

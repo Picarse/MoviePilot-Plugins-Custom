@@ -23,6 +23,49 @@ APP_CHANNEL_PATHS = {
 
 CATALOG_OPTIONS = (("web", "分类目录"), ("app", "App频道"))
 
+APP_TV_REGION_OPTIONS = (
+    ("内地", "内地"), ("中国香港", "中国香港"), ("中国台湾", "中国台湾"),
+    ("美国", "美国"), ("韩国", "韩国"), ("泰国", "泰国"), ("英国", "英国"),
+)
+APP_TV_GENRE_OPTIONS = (
+    ("古装", "古装"), ("战争", "战争"), ("谍战", "谍战"),
+    ("爱情", "爱情"), ("罪案", "罪案"), ("悬疑", "悬疑"),
+    ("家庭", "家庭"), ("都市", "都市"), ("青春", "青春"),
+    ("喜剧", "喜剧"), ("军旅", "军旅"), ("奇幻", "奇幻"),
+    ("武侠", "武侠"), ("历史", "历史"), ("年代", "年代"),
+)
+APP_TV_ACCESS_OPTIONS = (
+    ("recent_free", "近期转免"), ("free", "免费"),
+    ("limited_free", "限免"), ("vip", "VIP"),
+)
+APP_TV_HALL_OPTIONS = (
+    ("honor", "荣誉殿堂"), ("national", "国民殿堂"),
+    ("popular", "人气殿堂"), ("quality", "佳片殿堂"),
+)
+APP_TV_SPECIFICATION_OPTIONS = (
+    ("produced", "自制"), ("exclusive", "独播"),
+)
+APP_TV_SORT_OPTIONS = (
+    ("hot", "最热"), ("new", "最新"), ("score", "高分"),
+)
+APP_TV_THEATER_OPTIONS = (
+    ("迷雾剧场", "迷雾剧场"), ("恋恋剧场", "恋恋剧场"),
+    ("小逗剧场", "小逗剧场"), ("微尘剧场", "微尘剧场"),
+    ("大家剧场", "大家剧场"),
+)
+APP_TV_AWARD_OPTIONS = (
+    ("白玉兰奖", "白玉兰奖"), ("飞天奖", "飞天奖"),
+    ("金鹰奖", "金鹰奖"),
+)
+APP_TV_ACTOR_OPTIONS = (
+    ("张凌赫", "张凌赫"), ("黄景瑜", "黄景瑜"),
+    ("田曦薇", "田曦薇"), ("白鹿", "白鹿"), ("杨志刚", "杨志刚"),
+)
+APP_TV_RECOMMEND_OPTIONS = (
+    ("douban_high", "豆瓣高分"), ("heat_10000", "热度破10000"),
+    ("comments_10000000", "评论破1000万"),
+)
+
 APP_SECTION_OPTIONS = {
     "tv": (("all", "全部"), ("banner", "焦点图"), ("hot", "热剧推荐"),
            ("online", "网剧热播"), ("rank_list_1", "热播榜"),
@@ -50,8 +93,9 @@ APP_SECTION_OPTIONS = {
                  ("mytag_4", "英雄")),
 }
 
-SORT_OPTIONS = (("11", "热播榜"), ("8", "好评榜"), ("4", "新上线"))
-ACCESS_OPTIONS = (("0", "免费"), ("1", "会员"), ("2", "付费"))
+SORT_OPTIONS = (("11", "热度最高"), ("4", "最新上线"), ("8", "最好评"))
+ACCESS_OPTIONS = (("0", "免费"),)
+PRODUCTION_OPTIONS = (("1", "爱奇艺出品"), ("0", "非自制"))
 
 REGION_OPTIONS = {
     "movie": (("1", "华语"), ("28997", "香港地区"), ("2", "美国"),
@@ -74,14 +118,14 @@ GENRE_OPTIONS = {
               ("289", "悬疑"), ("10", "恐怖"), ("12", "动画"),
               ("27356", "家庭"), ("1284", "奇幻"), ("129", "魔幻"),
               ("9", "科幻"), ("7", "战争"), ("130", "青春")),
-    "tv": (("11992", "自制"), ("24", "古装"), ("20", "言情"),
+    "tv": (("24", "古装"), ("20", "言情"),
            ("23", "武侠"), ("30", "偶像"), ("1654", "家庭"),
            ("1653", "青春"), ("24064", "都市"), ("135", "喜剧"),
            ("27916", "战争"), ("1655", "军旅"), ("290", "谍战"),
            ("32", "悬疑"), ("149", "罪案"), ("148", "穿越"),
            ("139", "宫廷"), ("21", "历史"), ("145", "神话"),
            ("34", "科幻"), ("27", "年代"), ("24063", "剧情"),
-           ("27881", "奇幻"), ("24065", "网剧"), ("32839", "竖短片")),
+           ("27881", "奇幻")),
     "variety": (("155", "播报"), ("156", "访谈"), ("158", "游戏"),
                 ("292", "晚会"), ("293", "曲艺"), ("2118", "脱口秀"),
                 ("2224", "真人秀"), ("30278", "竞技"),
@@ -105,7 +149,9 @@ EXTRA_FILTER_OPTIONS = {
         "specification": ("规格", (("27397", "巨制"), ("27815", "院线"),
                                   ("30149", "独播"), ("27401", "网络电影"))),
     },
-    "tv": {},
+    "tv": {
+        "format": ("形式", (("24065", "网剧"),)),
+    },
     "variety": {
         "theme": ("题材", (("33163", "音乐"), ("33172", "舞蹈"),
                            ("33173", "文化"), ("33182", "美食"),
@@ -118,7 +164,7 @@ EXTRA_FILTER_OPTIONS = {
         "version": ("版本", (("30220", "动画"), ("30223", "特摄"),
                              ("30224", "布袋戏"), ("32782", "特别篇"),
                              ("32783", "动态漫画"), ("32784", "动画电影"),
-                             ("33482", "轻动画"), ("33483", "短剧"))),
+                             ("33482", "轻动画"))),
         "adaptation": ("来源", (("32796", "轻小说改编"),
                                 ("32797", "漫画改编"),
                                 ("32798", "游戏改编"), ("32799", "原创"))),
@@ -301,6 +347,18 @@ def normalize_app_item(item: Any, expected_channel: str,
     poster = normalize_url(
         item.get("image_url_normal") or item.get("image_cover") or item.get("image_url")
     )
+    tags = tuple(dict.fromkeys(
+        value.strip() for value in str(item.get("tag") or "").split(";")
+        if value.strip()
+    ))
+    theaters = _app_labels(item.get("theaters"), "title")
+    awards = _app_labels(item.get("awards"), "title", "text", "name")
+    card_labels = _app_labels(item.get("tag3lines"), "text", "title")
+    actors = tuple(dict.fromkeys((
+        *_names(item.get("starring")),
+        *_names(item.get("contributor")),
+        *_names(item.get("actor")),
+    )))
     return {
         "media_id": media_id,
         "title": title,
@@ -311,20 +369,38 @@ def normalize_app_item(item: Any, expected_channel: str,
         "focus": str(item.get("desc") or "").strip() or None,
         "year": year,
         "release_date": release_date,
-        "categories": (),
+        "categories": tags,
         "areas": (),
-        "actors": (),
+        "actors": actors,
         "score": _score(item.get("sns_score")),
         "total_episodes": total,
         "latest_episode": latest,
         "pay_mark": _app_pay_mark(item.get("pay_mark")),
-        "exclusive": False,
-        "produced": False,
         "update_status": str(item.get("dq_updatestatus") or "").strip() or None,
         "hot_score": _integer(item.get("hot_score")),
+        "exclusive": str(item.get("cornerMark") or "").lower() == "exclusive",
+        "produced": "自制" in tags,
+        "theaters": theaters,
+        "awards": awards,
+        "card_labels": card_labels,
+        "app_sections": (section_id,),
         "app_section_id": section_id,
         "app_section": section_title,
     }
+
+
+def _app_labels(value: Any, *keys: str) -> Tuple[str, ...]:
+    if not isinstance(value, list):
+        return ()
+    labels = []
+    for entry in value:
+        if not isinstance(entry, dict):
+            continue
+        label = next((str(entry.get(key) or "").strip() for key in keys
+                      if str(entry.get(key) or "").strip()), "")
+        if label:
+            labels.append(label)
+    return tuple(dict.fromkeys(labels))
 
 
 def _app_section_matches(section: Optional[str], block_id: str) -> bool:
@@ -343,7 +419,7 @@ def extract_app_items(payload: Any, mtype: str,
         return []
     expected_channel = CHANNEL_PARAMS[mtype]["Id"]
     results = []
-    seen = set()
+    indexes = {}
     for group in payload.get("items") or []:
         if not isinstance(group, dict):
             continue
@@ -356,11 +432,143 @@ def extract_app_items(payload: Any, mtype: str,
             section_title = str(block.get("title") or "").strip() or block_id
             for raw in block.get("data") or []:
                 item = normalize_app_item(raw, expected_channel, block_id, section_title)
-                if not item or item["media_id"] in seen:
+                if not item:
                     continue
-                seen.add(item["media_id"])
-                results.append(item)
+                index = indexes.get(item["media_id"])
+                if index is None:
+                    indexes[item["media_id"]] = len(results)
+                    results.append(item)
+                else:
+                    results[index] = merge_app_item(results[index], item)
     return results
+
+
+def merge_app_item(current: Dict[str, Any], incoming: Dict[str, Any]) -> Dict[str, Any]:
+    """Merge duplicate channel cards without discarding richer waterfall labels."""
+    merged = dict(current)
+    for key in (
+        "categories", "areas", "actors", "theaters", "awards", "card_labels",
+        "app_sections",
+    ):
+        merged[key] = tuple(dict.fromkeys(
+            (*current.get(key, ()), *incoming.get(key, ()))
+        ))
+    for key in ("exclusive", "produced"):
+        merged[key] = bool(current.get(key) or incoming.get(key))
+    for key in ("hot_score", "score"):
+        values = [value for value in (current.get(key), incoming.get(key)) if value is not None]
+        merged[key] = max(values) if values else None
+    for key, value in incoming.items():
+        if merged.get(key) in (None, "", (), []):
+            merged[key] = value
+    return merged
+
+
+def _app_year_matches(item: Dict[str, Any], year: Optional[str]) -> bool:
+    if not year:
+        return True
+    if year == "upcoming":
+        return "即将上线" in str(item.get("update_status") or "")
+    return str(item.get("year") or "") == year
+
+
+def _app_award_matches(item: Dict[str, Any], award: Optional[str]) -> bool:
+    if not award:
+        return True
+    labels = (*item.get("awards", ()), *item.get("card_labels", ()))
+    return any(award in label for label in labels if "奖" in label)
+
+
+def _app_hall_matches(item: Dict[str, Any], hall: Optional[str]) -> bool:
+    if not hall:
+        return True
+    if hall == "honor":
+        return bool(item.get("awards")) or any(
+            "奖" in label for label in item.get("card_labels", ())
+        )
+    section = {
+        "national": "rank_list_7",
+        "popular": "rank_list_1",
+        "quality": "rank_list_6",
+    }.get(hall)
+    return bool(section and section in item.get("app_sections", ()))
+
+
+def _app_access_matches(item: Dict[str, Any], access: Optional[str]) -> bool:
+    if not access:
+        return True
+    labels = item.get("card_labels", ())
+    if access == "recent_free":
+        return any("转免" in label for label in labels)
+    if access == "limited_free":
+        return any("限免" in label for label in labels)
+    if access == "free":
+        return item.get("pay_mark") == 0
+    if access == "vip":
+        return item.get("pay_mark") == 1
+    return False
+
+
+def _app_recommendation_matches(item: Dict[str, Any], recommendation: Optional[str]) -> bool:
+    if not recommendation:
+        return True
+    labels = item.get("card_labels", ())
+    if recommendation == "douban_high":
+        return any("豆瓣高分" in label for label in labels)
+    if recommendation == "heat_10000":
+        return any(re.search(r"热度破(?:10000|1万|万)", label) for label in labels)
+    if recommendation == "comments_10000000":
+        return any(re.search(r"评论(?:数)?破(?:1000万|千万)", label) for label in labels)
+    return False
+
+
+def filter_app_tv_items(items: List[Dict[str, Any]],
+                        region: Optional[str] = None,
+                        genre: Optional[str] = None,
+                        year: Optional[str] = None,
+                        access: Optional[str] = None,
+                        hall: Optional[str] = None,
+                        specification: Optional[str] = None,
+                        theater: Optional[str] = None,
+                        award: Optional[str] = None,
+                        actor: Optional[str] = None,
+                        recommendation: Optional[str] = None,
+                        mode: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Apply iQIYI card metadata filters used by the TV App-style catalog."""
+    filtered = []
+    for item in items:
+        tags = item.get("categories", ())
+        labels = item.get("card_labels", ())
+        if region and region not in tags:
+            continue
+        if genre and genre not in tags:
+            continue
+        if not _app_year_matches(item, year):
+            continue
+        if not _app_access_matches(item, access):
+            continue
+        if not _app_hall_matches(item, hall):
+            continue
+        if specification == "exclusive" and not item.get("exclusive"):
+            continue
+        if specification == "produced" and not item.get("produced"):
+            continue
+        if theater and theater not in item.get("theaters", ()) and theater not in labels:
+            continue
+        if not _app_award_matches(item, award):
+            continue
+        if actor and actor not in item.get("actors", ()):
+            continue
+        if not _app_recommendation_matches(item, recommendation):
+            continue
+        filtered.append(item)
+    if mode == "hot":
+        filtered.sort(key=lambda item: item.get("hot_score") or 0, reverse=True)
+    elif mode == "new":
+        filtered.sort(key=lambda item: item.get("release_date") or "", reverse=True)
+    elif mode == "score":
+        filtered.sort(key=lambda item: item.get("score") or 0, reverse=True)
+    return filtered
 
 
 def extract_items(payload: Any, mtype: str) -> List[Dict[str, Any]]:
