@@ -48,11 +48,12 @@
     "name": "优酷视频探索（自用版）",
     "description": "让探索支持优酷视频的数据浏览。",
     "labels": "探索",
-    "version": "1.0.0",
+    "version": "1.1.0",
     "icon": "https://img.alicdn.com/imgextra/i2/O1CN01BeAcgL1ywY0G5nSn8_!!6000000006643-2-tps-195-195.png",
     "author": "Picarse",
     "level": 1,
     "history": {
+      "v1.1.0": "扩展全部首屏推荐模块，增加匿名签名后续分页及题材、权益、更新状态筛选",
       "v1.0.0": "新增优酷电视剧、电影、综艺、动漫、少儿和纪录片探索数据源"
     }
   }

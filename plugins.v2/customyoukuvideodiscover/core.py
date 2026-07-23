@@ -4,16 +4,61 @@ from typing import Any, Dict, Iterable, List, Optional
 
 
 CHANNEL_PARAMS = {
-    "tv": {"Path": "webtv", "Name": "电视剧"},
-    "movie": {"Path": "webmovie", "Name": "电影"},
-    "variety": {"Path": "webvariety", "Name": "综艺"},
-    "anime": {"Path": "webcomic", "Name": "动漫"},
-    "children": {"Path": "webchild", "Name": "少儿"},
-    "documentary": {"Path": "webdocumentary", "Name": "纪录片"},
+    "tv": {"Path": "webtv", "Name": "电视剧", "Node": "WEBTV"},
+    "movie": {"Path": "webmovie", "Name": "电影", "Node": "WEBMOVIE"},
+    "variety": {"Path": "webvariety", "Name": "综艺", "Node": "WEBVARIETY"},
+    "anime": {"Path": "webcomic", "Name": "动漫", "Node": "WEBCOMIC"},
+    "children": {
+        "Path": "webchild",
+        "Name": "少儿",
+        "Node": "WEBCHILD",
+        "Api": "mtop.youku.huluwa.dispatcher.columbus.query",
+        "Code": "2019101800",
+    },
+    "documentary": {
+        "Path": "webdocumentary",
+        "Name": "纪录片",
+        "Node": "WEBDOCUMENTARY",
+    },
+}
+
+GENRE_OPTIONS = {
+    "tv": (
+        "爱情", "古装", "剧情", "悬疑", "喜剧", "都市",
+        "农村", "校园", "青春", "历史", "战争", "罪案",
+        "奇幻", "谍战", "情感", "刑侦", "武侠", "家庭",
+    ),
+    "movie": (
+        "剧情", "喜剧", "动作", "犯罪", "冒险", "战争",
+        "历史", "爱情", "科幻", "悬疑", "动画", "奇幻",
+        "家庭", "魔幻", "运动", "警匪", "惊悚", "恐怖",
+    ),
+    "variety": (
+        "真人秀", "游戏", "舞蹈", "音乐", "竞技",
+        "喜剧", "脱口秀", "情感", "文化", "旅游",
+        "相声", "晚会", "明星访谈",
+    ),
+    "anime": (
+        "玄幻", "热血", "古风", "推理", "都市",
+        "校园", "搞笑", "格斗", "冒险", "恋爱",
+        "剧情", "青春", "新国风", "神魔", "运动", "轻松",
+    ),
+    "children": (
+        "动画", "冒险", "亲子", "益智", "幽默",
+        "启蒙教育", "友情", "课程辅导", "神话传说", "推理",
+        "科普", "动画电影", "玩具", "安全教育", "思维逻辑",
+    ),
+    "documentary": (
+        "自然", "历史", "人物", "文化", "美食",
+        "探险", "竞技", "旅游", "知识",
+    ),
 }
 
 INITIAL_DATA_MARKER = "window.__INITIAL_DATA__ ="
-DEFAULT_POSTER = "https://img.alicdn.com/imgextra/i2/O1CN01BeAcgL1ywY0G5nSn8_!!6000000006643-2-tps-195-195.png"
+DEFAULT_POSTER = (
+    "https://img.alicdn.com/imgextra/i2/"
+    "O1CN01BeAcgL1ywY0G5nSn8_!!6000000006643-2-tps-195-195.png"
+)
 
 
 def clamp_positive_int(value: Any, default: int, maximum: int) -> int:
@@ -36,8 +81,6 @@ def parse_initial_data(html: Any) -> Dict[str, Any]:
     if end < 0:
         return {}
     source = html[start:end].strip().rstrip(";")
-    # The payload is JSON except that optional values can be emitted as the
-    # JavaScript literal `undefined`.
     source = re.sub(
         r"([:,\[])\s*undefined(?=\s*[,}\]])",
         r"\1null",
@@ -56,7 +99,6 @@ def _component_items(module: Any) -> Iterable[Dict[str, Any]]:
     for component in module.get("components") or []:
         if not isinstance(component, dict):
             continue
-        # Short-video components represent clips rather than MoviePilot media.
         if "SHORT_VIDEO" in str(component.get("typeName") or ""):
             continue
         for item in component.get("itemList") or []:
@@ -80,13 +122,12 @@ def _media_id(item: Dict[str, Any]) -> str:
     track_show = (
         item.get("trackShow") if isinstance(item.get("trackShow"), dict) else {}
     )
-    candidates = (
+    for candidate in (
         item.get("action_value"),
         action.get("value"),
         track_show.get("id"),
         item.get("id"),
-    )
-    for candidate in candidates:
+    ):
         value = str(candidate or "").strip()
         if value:
             return value
@@ -101,46 +142,144 @@ def _year(item: Dict[str, Any]) -> Optional[str]:
     return None
 
 
-def extract_media_items(payload: Any) -> List[Dict[str, Optional[str]]]:
-    """Extract unique long-form media cards, preferring Youku's feed drawer."""
+def _tag_values(item: Dict[str, Any]) -> tuple:
+    tags = []
+    genres = []
+    for tag in item.get("tags") or []:
+        if not isinstance(tag, dict):
+            continue
+        text = tag.get("text") if isinstance(tag.get("text"), dict) else {}
+        title = str(text.get("title") or "").strip()
+        if not title:
+            continue
+        tags.append(title)
+        if tag.get("uiType") == 2:
+            genres.extend(
+                part.strip()
+                for part in re.split(r"\s*[·/]\s*", title)
+                if part.strip()
+            )
+    return tuple(dict.fromkeys(tags)), tuple(dict.fromkeys(genres))
+
+
+def _media_item(item: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    if item.get("isYkAd") or item.get("ad_flag") or item.get("rawAdData"):
+        return None
+    action = item.get("action") if isinstance(item.get("action"), dict) else {}
+    action_type = str(item.get("action_type") or action.get("type") or "")
+    if action_type and action_type not in {"JUMP_TO_SHOW", "JUMP_TO_VIDEO"}:
+        return None
+    if item.get("shortShow") is True:
+        return None
+    title = str(item.get("title") or "").strip()
+    media_id = _media_id(item)
+    if not title or not media_id:
+        return None
+    tags, genres = _tag_values(item)
+    return {
+        "title": title,
+        "year": _year(item),
+        "media_id": media_id,
+        "poster": normalize_poster_url(item.get("img") or item.get("hImg")),
+        "tags": tags,
+        "genres": genres,
+    }
+
+
+def extract_media_items(payload: Any) -> List[Dict[str, Any]]:
+    """Extract unique long-form media cards from every SSR module."""
     if not isinstance(payload, dict):
         return []
     modules = payload.get("moduleList")
     if not isinstance(modules, list):
         return []
-    feed_modules = [
-        module
-        for module in modules
-        if isinstance(module, dict)
-        and str(module.get("typeName") or "") == "FEED_DRAWER_PAGINATION"
-    ]
-    candidates = feed_modules or modules
-    results: List[Dict[str, Optional[str]]] = []
+    results = []
     seen = set()
-    for module in candidates:
+    for module in modules:
         for item in _component_items(module):
-            if item.get("isYkAd") or item.get("ad_flag") or item.get("rawAdData"):
+            media = _media_item(item)
+            if not media or media["media_id"] in seen:
                 continue
-            action_type = str(item.get("action_type") or "")
-            if action_type and action_type not in {"JUMP_TO_SHOW", "JUMP_TO_VIDEO"}:
-                continue
-            title = str(item.get("title") or "").strip()
-            media_id = _media_id(item)
-            if not title or not media_id or media_id in seen:
-                continue
-            seen.add(media_id)
-            results.append({
-                "title": title,
-                "year": _year(item),
-                "media_id": media_id,
-                "poster": normalize_poster_url(item.get("img") or item.get("hImg")),
-            })
+            seen.add(media["media_id"])
+            results.append(media)
+    return results
+
+
+def extract_feed_state(payload: Any) -> Dict[str, Any]:
+    if not isinstance(payload, dict):
+        return {"items": [], "session": {}}
+    page_map = payload.get("pageMap")
+    page_map = page_map if isinstance(page_map, dict) else {}
+    session = page_map.get("feedSession")
+    return {
+        "items": extract_media_items(payload),
+        "session": session if isinstance(session, dict) else {},
+    }
+
+
+def extract_mtop_items(payload: Any, code: str) -> List[Dict[str, Any]]:
+    """Extract cards recursively from an untransformed Columbus response."""
+    if not isinstance(payload, dict):
+        return []
+    data = payload.get("data")
+    block = data.get(code) if isinstance(data, dict) else None
+    if not isinstance(block, dict) or block.get("success") is not True:
+        return []
+    results = []
+    seen = set()
+
+    def visit(value: Any):
+        if isinstance(value, dict):
+            node_data = value.get("data")
+            if isinstance(node_data, dict):
+                media = _media_item(node_data)
+                if media and media["media_id"] not in seen:
+                    seen.add(media["media_id"])
+                    results.append(media)
+            for child in value.get("nodes") or []:
+                visit(child)
+        elif isinstance(value, list):
+            for child in value:
+                visit(child)
+
+    visit(block.get("data"))
+    return results
+
+
+def filter_media_items(
+    items: Iterable[Dict[str, Any]],
+    genre: Optional[str] = None,
+    access: Optional[str] = None,
+    progress: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    results = []
+    access_tag = {
+        "vip": "VIP",
+        "exclusive": "独播",
+        "premiere": "首播",
+    }.get(access)
+    for item in items:
+        tags = tuple(item.get("tags") or ())
+        genres = tuple(item.get("genres") or ())
+        if genre and genre not in genres:
+            continue
+        if access_tag and access_tag not in tags:
+            continue
+        if progress == "complete" and not any(
+            re.search(r"(?:集|期|话)全$", tag) for tag in tags
+        ):
+            continue
+        if progress == "updating" and not any(
+            tag.startswith("更新至") for tag in tags
+        ):
+            continue
+        results.append(item)
     return results
 
 
 def page_items(
-    items: Iterable[Dict[str, Optional[str]]], page: int, count: int
-) -> List[Dict[str, Optional[str]]]:
+    items: Iterable[Dict[str, Any]], page: int, count: int
+) -> List[Dict[str, Any]]:
     values = list(items)
     start = (page - 1) * count
     return values[start:start + count]
