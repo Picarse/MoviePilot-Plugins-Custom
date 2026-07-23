@@ -7,10 +7,10 @@ from app.chain.site import SiteChain
 from app.core.config import settings
 from app.core.event import eventmanager
 from app.db.site_oper import SiteOper
-from app.helper.browser import PlaywrightHelper
 from app.log import logger
 from app.plugins import _PluginBase
 from app.schemas.types import EventType, NotificationType
+from app.utils.http import RequestUtils
 
 from .core import find_site_config, parse_site_configs
 
@@ -19,7 +19,7 @@ class CustomSiteRefresh(_PluginBase):
     plugin_name = "站点自动更新（自用版）"
     plugin_desc = "使用浏览器模拟登录站点获取Cookie和UA。"
     plugin_icon = "Chrome_A.png"
-    plugin_version = "1.4.0"
+    plugin_version = "1.5.0"
     plugin_author = "thsrite, Picarse"
     author_url = "https://github.com/thsrite"
     plugin_config_prefix = "customsiterefresh_"
@@ -148,7 +148,7 @@ class CustomSiteRefresh(_PluginBase):
             "path": "/connectivity",
             "endpoint": self.test_connectivity,
             "methods": ["POST"],
-            "summary": "使用自动登录的浏览器网络测试站点连通性",
+            "summary": "匿名测试站点网络连通性",
         }]
 
     def test_site(self, payload: Dict[str, Any], apikey: str) -> schemas.Response:
@@ -181,34 +181,45 @@ class CustomSiteRefresh(_PluginBase):
 
         site_lock = self._get_site_lock(site_id)
         if not site_lock.acquire(blocking=False):
-            message = f"站点 {site.name} 正在执行浏览器操作，请稍后重试"
+            message = f"站点 {site.name} 正在执行站点操作，请稍后重试"
             self._connectivity_results[site_id] = (False, message)
             return schemas.Response(success=False, message=message)
 
-        proxy_config = settings.PROXY_SERVER if site.proxy else None
+        proxy_config = settings.PROXY if site.proxy else None
         if site.proxy and not proxy_config:
             route = "站点代理未配置，实际直连"
         else:
             route = "站点代理" if proxy_config else "直连"
-        timeout = int(site.timeout or 60)
+        timeout = max(1, min(int(site.timeout or 10), 10))
         started_at = time.monotonic()
+        response = None
         try:
-            page_source = PlaywrightHelper().get_page_source(
-                url=site.url,
+            response = RequestUtils(
+                headers={
+                    "User-Agent": "MoviePilot-Connectivity-Test/1.0",
+                    "Accept": "*/*",
+                    "Connection": "close",
+                },
                 proxies=proxy_config,
                 timeout=timeout,
+            ).request(
+                method="head",
+                url=site.url,
+                allow_redirects=False,
+                stream=True,
+                raise_exception=True,
             )
             elapsed = time.monotonic() - started_at
-            if page_source:
+            if response is not None:
                 message = (
-                    f"浏览器连通成功（{route}，耗时 {elapsed:.1f} 秒，"
-                    f"页面 {len(page_source)} 字符）"
+                    f"网络连通成功（{route}，HTTP {response.status_code}，"
+                    f"耗时 {elapsed:.1f} 秒）"
                 )
                 state = True
                 logger.info(f"站点 {site.name} {message}")
             else:
                 message = (
-                    f"浏览器访问失败或未在 {timeout} 秒内完成页面加载"
+                    f"网络请求未获得响应"
                     f"（{route}，耗时 {elapsed:.1f} 秒）"
                 )
                 state = False
@@ -216,9 +227,14 @@ class CustomSiteRefresh(_PluginBase):
         except Exception as error:
             elapsed = time.monotonic() - started_at
             state = False
-            message = f"浏览器连通测试异常（{route}，耗时 {elapsed:.1f} 秒）：{error}"
+            message = (
+                f"网络连通失败（{route}，最长等待 {timeout} 秒，"
+                f"耗时 {elapsed:.1f} 秒，错误类型 {type(error).__name__}）"
+            )
             logger.error(f"站点 {site.name} {message}")
         finally:
+            if response is not None:
+                response.close()
             site_lock.release()
 
         self._connectivity_results[site_id] = (state, message)
@@ -356,7 +372,8 @@ class CustomSiteRefresh(_PluginBase):
                 "type": "warning",
                 "variant": "tonal",
                 "class": "mb-4",
-                "text": "测试连通性不提交账号且不修改Cookie/UA；"
+                "text": "测试连通性仅发送匿名HEAD请求，不使用浏览器、账号或2FA，"
+                        "不读取站点已存Cookie/UA；"
                         "立即测试会真实登录，并在成功后覆盖当前Cookie和UA。",
             },
         }, {

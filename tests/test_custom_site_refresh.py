@@ -41,7 +41,10 @@ def load_plugin_module():
     core_config = types.ModuleType("app.core.config")
     core_config.settings = types.SimpleNamespace(
         API_TOKEN="test-token",
-        PROXY_SERVER={"server": "http://proxy.test:8080"},
+        PROXY={
+            "http": "http://proxy.test:8080",
+            "https": "http://proxy.test:8080",
+        },
     )
     core_event = types.ModuleType("app.core.event")
     core_event.eventmanager = types.SimpleNamespace(
@@ -61,12 +64,24 @@ def load_plugin_module():
 
     db_site_oper.SiteOper = SiteOper
 
-    helper_browser = types.ModuleType("app.helper.browser")
+    utils_http = types.ModuleType("app.utils.http")
 
-    class PlaywrightHelper:
-        get_page_source = Mock(return_value="<html>reachable</html>")
+    class RequestUtils:
+        init_calls = []
+        request_calls = []
+        response = None
+        error = None
 
-    helper_browser.PlaywrightHelper = PlaywrightHelper
+        def __init__(self, **kwargs):
+            self.init_calls.append(kwargs)
+
+        def request(self, **kwargs):
+            self.request_calls.append(kwargs)
+            if self.error:
+                raise self.error
+            return self.response
+
+    utils_http.RequestUtils = RequestUtils
 
     app_log = types.ModuleType("app.log")
     app_log.logger = types.SimpleNamespace(
@@ -95,11 +110,11 @@ def load_plugin_module():
         "app.core.event": core_event,
         "app.db": types.ModuleType("app.db"),
         "app.db.site_oper": db_site_oper,
-        "app.helper": types.ModuleType("app.helper"),
-        "app.helper.browser": helper_browser,
         "app.log": app_log,
         "app.plugins": app_plugins,
         "app.schemas.types": schema_types,
+        "app.utils": types.ModuleType("app.utils"),
+        "app.utils.http": utils_http,
     }
     sys.modules.update(stubs)
 
@@ -113,7 +128,7 @@ def load_plugin_module():
     module = importlib.util.module_from_spec(spec)
     sys.modules[module_name] = module
     spec.loader.exec_module(module)
-    return module, SiteOper, SiteChain, PlaywrightHelper
+    return module, SiteOper, SiteChain, RequestUtils
 
 
 class CustomSiteRefreshCoreTest(unittest.TestCase):
@@ -165,7 +180,7 @@ class CustomSiteRefreshCoreTest(unittest.TestCase):
 class CustomSiteRefreshFlowTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.module, cls.site_oper, cls.site_chain, cls.playwright = load_plugin_module()
+        cls.module, cls.site_oper, cls.site_chain, cls.request_utils = load_plugin_module()
 
     def setUp(self):
         self.module.CustomSiteRefresh._site_locks.clear()
@@ -174,8 +189,11 @@ class CustomSiteRefreshFlowTest(unittest.TestCase):
         self.module.CustomSiteRefresh._connectivity_results.clear()
         self.site_chain.update_cookie.reset_mock()
         self.site_chain.update_cookie.return_value = (True, "")
-        self.playwright.get_page_source.reset_mock()
-        self.playwright.get_page_source.return_value = "<html>reachable</html>"
+        self.response = types.SimpleNamespace(status_code=204, close=Mock())
+        self.request_utils.init_calls.clear()
+        self.request_utils.request_calls.clear()
+        self.request_utils.response = self.response
+        self.request_utils.error = None
         self.site_oper.sites = {
             1: types.SimpleNamespace(
                 id=1,
@@ -237,7 +255,7 @@ class CustomSiteRefreshFlowTest(unittest.TestCase):
         self.assertIn(1, self.plugin._test_results)
         self.site_chain.update_cookie.assert_called_once()
 
-    def test_connectivity_uses_same_browser_route_without_logging_in(self):
+    def test_connectivity_uses_anonymous_head_without_logging_in(self):
         self.plugin.init_plugin({
             "enabled": False,
             "siteconf": "example.com|alice|secret",
@@ -245,42 +263,59 @@ class CustomSiteRefreshFlowTest(unittest.TestCase):
         response = self.plugin.test_connectivity({"site_id": 1}, "test-token")
         self.assertTrue(response.success)
         self.assertIn("直连", response.message)
-        self.playwright.get_page_source.assert_called_once_with(
-            url="https://pt.example.com/login",
-            proxies=None,
-            timeout=15,
+        self.assertIn("HTTP 204", response.message)
+        self.assertEqual(self.request_utils.init_calls[0]["proxies"], None)
+        self.assertEqual(self.request_utils.init_calls[0]["timeout"], 10)
+        self.assertEqual(
+            self.request_utils.init_calls[0]["headers"]["User-Agent"],
+            "MoviePilot-Connectivity-Test/1.0",
         )
+        self.assertEqual(self.request_utils.request_calls, [{
+            "method": "head",
+            "url": "https://pt.example.com/login",
+            "allow_redirects": False,
+            "stream": True,
+            "raise_exception": True,
+        }])
+        self.response.close.assert_called_once()
         self.site_chain.update_cookie.assert_not_called()
 
-    def test_connectivity_honors_site_proxy_and_reports_failure(self):
+    def test_connectivity_honors_site_proxy_and_accepts_http_error_status(self):
         self.site_oper.sites[1].proxy = True
-        self.playwright.get_page_source.return_value = None
+        self.response.status_code = 403
         response = self.plugin.test_connectivity({"site_id": 1}, "test-token")
-        self.assertFalse(response.success)
+        self.assertTrue(response.success)
         self.assertIn("站点代理", response.message)
-        self.assertIn("15 秒", response.message)
-        self.playwright.get_page_source.assert_called_once_with(
-            url="https://pt.example.com/login",
-            proxies={"server": "http://proxy.test:8080"},
-            timeout=15,
-        )
+        self.assertIn("HTTP 403", response.message)
+        self.assertEqual(self.request_utils.init_calls[0]["proxies"], {
+            "http": "http://proxy.test:8080",
+            "https": "http://proxy.test:8080",
+        })
 
     def test_connectivity_api_rejects_invalid_token(self):
         response = self.plugin.test_connectivity({"site_id": 1}, "wrong-token")
         self.assertFalse(response.success)
-        self.playwright.get_page_source.assert_not_called()
+        self.assertEqual(self.request_utils.request_calls, [])
 
     def test_connectivity_discloses_missing_global_proxy(self):
         self.site_oper.sites[1].proxy = True
-        original_proxy = self.module.settings.PROXY_SERVER
-        self.module.settings.PROXY_SERVER = None
+        original_proxy = self.module.settings.PROXY
+        self.module.settings.PROXY = None
         try:
             response = self.plugin.test_connectivity({"site_id": 1}, "test-token")
         finally:
-            self.module.settings.PROXY_SERVER = original_proxy
+            self.module.settings.PROXY = original_proxy
         self.assertTrue(response.success)
         self.assertIn("代理未配置，实际直连", response.message)
-        self.assertIsNone(self.playwright.get_page_source.call_args.kwargs["proxies"])
+        self.assertIsNone(self.request_utils.init_calls[0]["proxies"])
+
+    def test_connectivity_failure_reports_only_safe_error_type(self):
+        self.request_utils.error = RuntimeError("proxy-user:proxy-password")
+        response = self.plugin.test_connectivity({"site_id": 1}, "test-token")
+        self.assertFalse(response.success)
+        self.assertIn("RuntimeError", response.message)
+        self.assertNotIn("proxy-password", response.message)
+        self.site_chain.update_cookie.assert_not_called()
 
 
 if __name__ == "__main__":
