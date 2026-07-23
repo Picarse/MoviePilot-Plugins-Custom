@@ -30,6 +30,27 @@ def item(**values):
     return result
 
 
+def app_item(**values):
+    result = {
+        "album_id": 987,
+        "channel_id": 4,
+        "title": "示例动画单集标题",
+        "display_name": "示例动画",
+        "image_url_normal": "https://pic0.iqiyipic.com/example_318_424.webp",
+        "page_url": "https://www.iqiyi.com/v_example.html",
+        "description": "App频道简介",
+        "desc": "每周四更新",
+        "date": {"year": 2026, "month": 7, "day": 23},
+        "dq_updatestatus": "更新至47集",
+        "pay_mark": "PAY_MARK_FUN_VIP_MARK",
+        "sns_score": "8.5",
+        "hot_score": 3159,
+        "isAd": False,
+    }
+    result.update(values)
+    return result
+
+
 class CustomIqiyiVideoCoreTest(unittest.TestCase):
     def test_extract_items_validates_status_channel_and_deduplicates(self):
         payload = {"code": "A00000", "data": {"list": [
@@ -90,6 +111,38 @@ class CustomIqiyiVideoCoreTest(unittest.TestCase):
         merged = CORE.merge_detail(catalog, {"description": None, "areas": ()})
         self.assertEqual(merged["description"], "目录简介")
         self.assertEqual(merged["poster"], catalog["poster"])
+
+    def test_extract_app_channel_sections_and_movie_ids(self):
+        payload = {"code": 0, "items": [{"video": [
+            {"title": "C位动画", "block_id": "hot", "data": [
+                app_item(), app_item(title="重复单集标题"),
+                app_item(album_id=654, channel_id=2),
+            ]},
+            {"title": "周四", "block_id": "jmd_Thur", "data": [
+                app_item(album_id=321, display_name="周四动画", dq_updatestatus="12集全")
+            ]},
+            {"title": "热播榜", "block_id": "rank_list_1", "data": [
+                app_item(album_id=456, display_name="榜单动画")
+            ]},
+        ]}]}
+        rows = CORE.extract_app_items(payload, "anime", "all")
+        self.assertEqual([row["media_id"] for row in rows], ["987", "321", "456"])
+        self.assertEqual(rows[0]["title"], "示例动画")
+        self.assertEqual(rows[0]["latest_episode"], 47)
+        self.assertEqual(rows[0]["pay_mark"], 1)
+        self.assertEqual(rows[0]["score"], 8.5)
+        self.assertEqual(rows[0]["app_section"], "C位动画")
+        schedule = CORE.extract_app_items(payload, "anime", "schedule")
+        self.assertEqual([row["media_id"] for row in schedule], ["321"])
+        self.assertEqual(schedule[0]["total_episodes"], 12)
+
+        movie = CORE.normalize_app_item(
+            app_item(album_id=None, film_id=777, channel_id=1, display_name="示例电影"),
+            "1", "rank_list_1", "热播榜",
+        )
+        self.assertEqual(movie["media_id"], "777")
+        self.assertEqual(movie["release_date"], "2026-07-23")
+        self.assertEqual(CORE.extract_app_items({"code": 1}, "anime"), [])
 
     def test_clamp_and_verified_filter_tables(self):
         self.assertEqual(CORE.clamp_positive_int("0", 10, 48), 1)
@@ -223,6 +276,32 @@ class CustomIqiyiVideoPluginTest(unittest.TestCase):
         self.assertEqual(enriched[0]["description"], "详情一")
         self.assertEqual(enriched[1]["title"], "示例节目")
         self.assertEqual(enriched[2]["media_id"], "3")
+
+    def test_app_channel_request_and_local_pagination(self):
+        module, requests_module = load_plugin_module()
+        response = Mock()
+        response.raise_for_status.return_value = None
+        response.json.return_value = {"code": 0, "items": [{"video": [{
+            "title": "热播榜", "block_id": "rank_list_1",
+            "data": [app_item(album_id=index) for index in range(1, 16)],
+        }]}]}
+        requests_module.get.return_value = response
+        payload = module.CustomIqiyiVideoDiscover._fetch_app_payload("anime")
+        self.assertEqual(payload["code"], 0)
+        self.assertEqual(
+            requests_module.get.call_args.args[0],
+            "https://mesh.if.iqiyi.com/portal/lw/v7/channel/cartoon",
+        )
+
+        plugin = module.CustomIqiyiVideoDiscover()
+        plugin._enabled = True
+        plugin._request_app_payload = Mock(return_value=payload)
+        plugin._request_detail = Mock()
+        rows = plugin.iqiyivideo_discover(
+            mtype="anime", catalog="app", section="rank_list_1", page=2, count=10
+        )
+        self.assertEqual([row.media_id for row in rows], [str(index) for index in range(11, 16)])
+        plugin._request_detail.assert_not_called()
 
     def test_manifest_version_matches_plugin(self):
         module, _requests_module = load_plugin_module()

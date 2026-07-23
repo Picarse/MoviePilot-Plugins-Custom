@@ -56,15 +56,16 @@
 ## 爱奇艺视频探索（自用版）
 
 - 插件 ID：`CustomIqiyiVideoDiscover`
-- 数据来源：爱奇艺公开的匿名 PC Web 目录和节目详情接口；请求头标明 iOS App `17.7.2`，但不依赖账号、Cookie、设备 ID 或私有签名
+- 数据来源：爱奇艺公开的匿名 PC Web 目录/节目详情接口，以及 App/网页共享的匿名 Mesh 频道接口；均不依赖账号、Cookie、设备 ID 或私有签名
 - 功能：向 MoviePilot“探索”注册爱奇艺数据源，支持电视剧、电影、综艺、动漫、少儿和纪录片六个真实频道，以及热播、好评、新上线、年份和资费筛选
+- App 频道：电视剧、电影、综艺、动漫和少儿可切换到 App 首页数据，浏览焦点、热门推荐、更新日历及热播、飙升、免费、必看、高分等频道真实榜单；App 数据按频道缓存并在本地分页
 - 分类筛选：电影、电视剧、综艺、动漫和纪录片提供经真实请求验证的分频道地区与题材 ID，并扩展电影规格、综艺题材、动漫版本和改编来源，以及纪录片出品方、片种和时长；多条件由服务端求交集
 - 高清海报：根据接口声明的可用尺寸选择真实 `579×772` 竖版图，替代目录默认的 `120×160` 缩略图；不对低清图片做本地拉伸
 - 详情增强：当前页按需补全准确分类、地区、演员、权益、简介、评分、上映/更新日期及集数，并在卡片简介中展示，默认最多 12 条、可配置为 1–30 条
 - 可靠性：列表缓存 30 分钟、详情缓存 6 小时、最多 6 个并发详情请求；详情失败时保留目录卡片，列表失败时返回空结果而不串用其他频道
 - 独立性：使用独立插件 ID、配置前缀、API 路径、缓存区域和媒体 ID 前缀
 
-公开代码中常见的 `mesh.if.iqiyi.com` App 参数组合及 `order/year/area/genre` 参数并未直接采用：前者以 `17.7.2` 请求时实测只返回成功空壳，后者会被目录服务忽略。插件只使用实测生效的 `mode`、`market_release_date_level`、`is_purchase` 和 `three_category_id`，少儿频道不展示未经验证的地区或题材选项。
+`mesh.if.iqiyi.com/portal/lw/v7/channel/{tv|film|variety|cartoon|child}` 已实测可匿名返回完整的 App 风格频道数据；该服务也带有 PC Web 标记，因此不声称它是 iOS 独占接口。数字频道路径及 `movie/anime/children/documentary` 等直译路径会返回 404。纪录片没有对应的已验证 App 路径，`knowledge` 是知识频道而非纪录片，因此纪录片继续使用 PC Web 目录。PC Web 目录只使用实测生效的 `mode`、`market_release_date_level`、`is_purchase` 和 `three_category_id`；`order/year/area/genre` 会被服务端忽略，未在插件中伪装成有效筛选。详细研究记录见 [`docs/iqiyi-ios-app-api.md`](docs/iqiyi-ios-app-api.md)。
 
 ## 添加插件库
 

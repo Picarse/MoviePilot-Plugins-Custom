@@ -13,6 +13,43 @@ CHANNEL_PARAMS = {
     "documentary": {"Id": "3", "Name": "纪录片"},
 }
 
+APP_CHANNEL_PATHS = {
+    "tv": "tv",
+    "movie": "film",
+    "variety": "variety",
+    "anime": "cartoon",
+    "children": "child",
+}
+
+CATALOG_OPTIONS = (("web", "分类目录"), ("app", "App频道"))
+
+APP_SECTION_OPTIONS = {
+    "tv": (("all", "全部"), ("banner", "焦点图"), ("hot", "热剧推荐"),
+           ("online", "网剧热播"), ("rank_list_1", "热播榜"),
+           ("rank_list_2", "飙升榜"), ("rank_list_3", "免费榜"),
+           ("rank_list_4", "必看榜"), ("rank_list_5", "期待榜"),
+           ("rank_list_6", "高分榜"), ("rank_list_7", "N刷榜")),
+    "movie": (("all", "全部"), ("banner", "焦点图"), ("online", "热播电影"),
+              ("rank_list_1", "热播榜"), ("rank_list_2", "飙升榜"),
+              ("rank_list_3", "免费榜"), ("rank_list_4", "必看榜"),
+              ("rank_list_5", "网络票房榜"), ("rank_list_6", "票房榜"),
+              ("rank_list_7", "高分榜")),
+    "variety": (("all", "全部"), ("banner", "焦点图"), ("hot", "热播综艺"),
+                ("waterfall", "更多推荐"), ("rank_list_1", "热播榜"),
+                ("rank_list_2", "飙升榜"), ("rank_list_3", "必看榜"),
+                ("rank_list_4", "高分榜"), ("rank_list_5", "旅行榜"),
+                ("rank_list_6", "访谈榜"), ("rank_list_7", "美食榜")),
+    "anime": (("all", "全部"), ("banner", "焦点图"), ("hot", "C位动画"),
+              ("schedule", "更新日历"), ("rank_list_1", "热播榜"),
+              ("rank_list_2", "飙升榜"), ("rank_list_3", "免费榜"),
+              ("rank_list_4", "期待榜"), ("rank_list_5", "日漫榜"),
+              ("rank_list_6", "国漫榜"), ("rank_list_7", "必看榜")),
+    "children": (("all", "全部"), ("banner", "焦点图"),
+                 ("tracing", "为你推荐"), ("mytag_1", "推荐"),
+                 ("mytag_2", "搞笑"), ("mytag_3", "动物"),
+                 ("mytag_4", "英雄")),
+}
+
 SORT_OPTIONS = (("11", "热播榜"), ("8", "好评榜"), ("4", "新上线"))
 ACCESS_OPTIONS = (("0", "免费"), ("1", "会员"), ("2", "付费"))
 
@@ -208,6 +245,124 @@ def normalize_item(item: Any, expected_channel: Optional[str] = None) -> Dict[st
     }
 
 
+def _app_date(value: Any) -> Tuple[Optional[str], Optional[str]]:
+    if not isinstance(value, dict):
+        return None, None
+    try:
+        year = int(value.get("year"))
+        month = int(value.get("month"))
+        day = int(value.get("day"))
+    except (TypeError, ValueError):
+        return None, None
+    if year < 1900 or not 1 <= month <= 12 or not 1 <= day <= 31:
+        return None, None
+    return str(year), f"{year:04d}-{month:02d}-{day:02d}"
+
+
+def _app_episode_progress(value: Any) -> Tuple[Optional[int], Optional[int]]:
+    text = str(value or "").strip()
+    complete = re.search(r"(\d+)集全", text)
+    if complete:
+        count = _integer(complete.group(1))
+        return count, count
+    latest = re.search(r"更新至(\d+)集", text)
+    return None, _integer(latest.group(1)) if latest else None
+
+
+def _app_pay_mark(value: Any) -> Optional[int]:
+    text = str(value or "").upper()
+    if not text:
+        return None
+    if text == "NONE_MARK":
+        return 0
+    if "VIP" in text:
+        return 1
+    if "PAY" in text:
+        return 2
+    return None
+
+
+def normalize_app_item(item: Any, expected_channel: str,
+                       section_id: str, section_title: str) -> Dict[str, Any]:
+    """Normalize one anonymous Mesh/App channel card."""
+    if not isinstance(item, dict) or item.get("isAd"):
+        return {}
+    channel_id = str(item.get("channel_id") or "").strip()
+    if channel_id != expected_channel:
+        return {}
+    media_id = str(item.get("album_id") or item.get("film_id") or "").strip()
+    title = str(
+        item.get("display_name") or item.get("album_name") or item.get("title") or ""
+    ).strip()
+    if not media_id or not title:
+        return {}
+    year, release_date = _app_date(item.get("date"))
+    total, latest = _app_episode_progress(item.get("dq_updatestatus"))
+    poster = normalize_url(
+        item.get("image_url_normal") or item.get("image_cover") or item.get("image_url")
+    )
+    return {
+        "media_id": media_id,
+        "title": title,
+        "channel_id": channel_id,
+        "poster": poster,
+        "play_url": normalize_url(item.get("page_url") or item.get("play_url")),
+        "description": str(item.get("description") or "").strip() or None,
+        "focus": str(item.get("desc") or "").strip() or None,
+        "year": year,
+        "release_date": release_date,
+        "categories": (),
+        "areas": (),
+        "actors": (),
+        "score": _score(item.get("sns_score")),
+        "total_episodes": total,
+        "latest_episode": latest,
+        "pay_mark": _app_pay_mark(item.get("pay_mark")),
+        "exclusive": False,
+        "produced": False,
+        "update_status": str(item.get("dq_updatestatus") or "").strip() or None,
+        "hot_score": _integer(item.get("hot_score")),
+        "app_section_id": section_id,
+        "app_section": section_title,
+    }
+
+
+def _app_section_matches(section: Optional[str], block_id: str) -> bool:
+    if not section or section == "all":
+        return True
+    if section == "schedule":
+        return block_id.startswith("jmd_")
+    return block_id == section
+
+
+def extract_app_items(payload: Any, mtype: str,
+                      section: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Extract and de-duplicate long-form cards from a Mesh/App channel payload."""
+    if (not isinstance(payload, dict) or payload.get("code") != 0
+            or mtype not in APP_CHANNEL_PATHS):
+        return []
+    expected_channel = CHANNEL_PARAMS[mtype]["Id"]
+    results = []
+    seen = set()
+    for group in payload.get("items") or []:
+        if not isinstance(group, dict):
+            continue
+        for block in group.get("video") or []:
+            if not isinstance(block, dict):
+                continue
+            block_id = str(block.get("block_id") or "").strip()
+            if not block_id or not _app_section_matches(section, block_id):
+                continue
+            section_title = str(block.get("title") or "").strip() or block_id
+            for raw in block.get("data") or []:
+                item = normalize_app_item(raw, expected_channel, block_id, section_title)
+                if not item or item["media_id"] in seen:
+                    continue
+                seen.add(item["media_id"])
+                results.append(item)
+    return results
+
+
 def extract_items(payload: Any, mtype: str) -> List[Dict[str, Any]]:
     if not isinstance(payload, dict) or payload.get("code") != "A00000":
         return []
@@ -250,6 +405,8 @@ def category_value(*categories: Optional[str]) -> Optional[str]:
 
 def media_overview(item: Dict[str, Any], mtype: str) -> Optional[str]:
     parts = []
+    if item.get("app_section"):
+        parts.append(f"App频道：{item['app_section']}")
     total = item.get("total_episodes")
     latest = item.get("latest_episode")
     if mtype in {"tv", "anime", "children"}:
@@ -261,6 +418,11 @@ def media_overview(item: Dict[str, Any], mtype: str) -> Optional[str]:
             parts.append(f"共{total}集")
     elif mtype in {"variety", "documentary"} and item.get("release_date"):
         parts.append(f"更新日期：{item['release_date']}")
+    update_status = str(item.get("update_status") or "").strip()
+    if update_status and not any(update_status in part for part in parts):
+        parts.append(update_status)
+    if item.get("hot_score"):
+        parts.append(f"热度：{item['hot_score']}")
     labels = [*item.get("areas", ()), *item.get("categories", ())]
     labels = list(dict.fromkeys(labels))[:8]
     if labels:
