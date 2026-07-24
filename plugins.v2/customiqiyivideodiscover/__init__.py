@@ -54,7 +54,7 @@ class CustomIqiyiVideoDiscover(_PluginBase):
     plugin_name = "爱奇艺视频探索（自用版）"
     plugin_desc = "让探索支持爱奇艺视频的数据浏览。"
     plugin_icon = "https://www.iqiyi.com/favicon.ico"
-    plugin_version = "1.4.0"
+    plugin_version = "1.5.0"
     plugin_author = "Picarse"
     author_url = "https://github.com/Picarse"
     plugin_config_prefix = "customiqiyivideodiscover_"

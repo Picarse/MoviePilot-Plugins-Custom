@@ -46,7 +46,7 @@ GET https://mesh.if.iqiyi.com/portal/lw/v7/channel/{channel}
 | `film_id` | 电影节目 ID；电影频道不能假定存在 `album_id` |
 | `channel_id` | 用于排除跨频道推广卡片 |
 | `display_name`、`album_name`、`title` | 依次选择节目标题，避免把单集标题当作节目名 |
-| `image_url_normal`、`image_cover` | 优先选择现成竖版海报，不猜测不存在的 CDN 尺寸 |
+| `image_url_normal`、`image_cover` | `image_url_normal` 在部分模块中是 320×180 横图，未标尺寸的 `image_cover` 实测仅 120×160；插件以竖版 `image_cover` 为源，加载跨五频道验证可用的 579×772 CDN 版本 |
 | `description`、`desc` | 节目简介和模块文案 |
 | `date`、`showDate` | 上线日期 |
 | `dq_updatestatus` | `更新至 N 集`、`N 集全` 或综艺期数状态 |
@@ -69,5 +69,7 @@ GET https://mesh.if.iqiyi.com/portal/lw/v7/channel/{channel}
 以下路径验证为 404，不能当作可用频道：数字频道 ID，以及 `movie`、`anime`、`children`、`documentary` 等直译名称。`knowledge` 返回的是“知识-v7-PCW”，不是纪录片频道，插件没有把它错误映射为纪录片。
 
 Mesh 是频道首页聚合接口，不接受 PC Web 分类目录那套数字分类参数，但节目卡片本身提供可用于本地筛选的标签。插件只使用这一来源，提供五频道栏目和榜单浏览，并为电视剧提供截图式多维筛选；界面不再显示“分类目录 / App频道”来源切换。纪录片没有已验证的 App 路径，因此不再作为可选频道。
+
+海报清晰度复核时，五频道当前 1,450 张原始卡片里存在大量不适合作为竖版海报的 `image_url_normal`：电视剧 98 张、电影 24 张、动漫 155 张为 320×180，综艺还包含 320×180 和 592×333，少儿另有 12 张 260×360。未带尺寸后缀的 `image_cover` 实际只有 120×160。对五频道各抽样 10 张，将 `image_cover` 的尺寸后缀规范为 `_579_772` 后，50/50 均返回 HTTP 200，解码尺寸全部为 579×772。因此插件固定使用这一已验证的竖版规格，不再优先采用横图或低分辨率缩略图。
 
 接口属于爱奇艺可随时调整的公开服务。代码会校验 HTTP 状态、顶层 `code`、频道 ID、节目 ID 和标题；异常时返回空结果，不跨频道回退或伪造内容。

@@ -36,6 +36,35 @@ def app_item(**values):
 
 
 class CustomIqiyiVideoCoreTest(unittest.TestCase):
+    def test_app_poster_uses_verified_high_resolution_portrait(self):
+        item = app_item(
+            image_url_normal=(
+                "https://pic0.iqiyipic.com/image/example_m4_320_180.webp"
+            ),
+            image_cover="http://pic0.iqiyipic.com/image/example_m4.webp",
+        )
+        poster = CORE.high_resolution_app_poster(item)
+        self.assertEqual(
+            poster,
+            "https://pic0.iqiyipic.com/image/example_m4_579_772.webp",
+        )
+        normalized = CORE.normalize_app_item(item, "4", "hot", "C位动画")
+        self.assertEqual(normalized["poster"], poster)
+        self.assertNotIn("320_180", normalized["poster"])
+        self.assertEqual(
+            CORE.high_resolution_app_poster({
+                "image_url_normal": "https://example.com/poster_318_424.webp"
+            }),
+            "https://example.com/poster_318_424.webp",
+        )
+
+    def test_media_overview_does_not_expose_internal_app_section(self):
+        item = CORE.normalize_app_item(app_item(), "4", "banner", "焦点图")
+        overview = CORE.media_overview(item, "anime")
+        self.assertNotIn("App频道：焦点图", overview)
+        self.assertNotIn("App频道：", overview)
+        self.assertIn("更新至47集", overview)
+
     def test_extract_app_channel_sections_and_movie_ids(self):
         payload = {"code": 0, "items": [{"video": [
             {"title": "C位动画", "block_id": "hot", "data": [

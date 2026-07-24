@@ -107,6 +107,30 @@ def normalize_url(value: Any) -> str:
     return text
 
 
+def high_resolution_app_poster(item: Any) -> str:
+    """Build iQIYI's verified 579x772 portrait rendition for an App card."""
+    if not isinstance(item, dict):
+        return ""
+    value = (
+        item.get("image_cover")
+        or item.get("image_url_normal")
+        or item.get("image_url")
+    )
+    url = normalize_url(value)
+    if not re.match(r"^https://(?:[^/]+\.)?iqiyipic\.com/", url, re.I):
+        return url
+    size_pattern = r"_\d+_\d+(?=\.(?:jpe?g|webp|avif)(?:\?|$))"
+    if re.search(size_pattern, url, re.I):
+        return re.sub(size_pattern, "_579_772", url, count=1, flags=re.I)
+    return re.sub(
+        r"\.(jpe?g|webp|avif)(?=\?|$)",
+        r"_579_772.\1",
+        url,
+        count=1,
+        flags=re.I,
+    )
+
+
 def _names(value: Any) -> Tuple[str, ...]:
     if not isinstance(value, list):
         return ()
@@ -188,9 +212,7 @@ def normalize_app_item(item: Any, expected_channel: str,
         return {}
     year, release_date = _app_date(item.get("date"))
     total, latest = _app_episode_progress(item.get("dq_updatestatus"))
-    poster = normalize_url(
-        item.get("image_url_normal") or item.get("image_cover") or item.get("image_url")
-    )
+    poster = high_resolution_app_poster(item)
     tags = tuple(dict.fromkeys(
         value.strip() for value in str(item.get("tag") or "").split(";")
         if value.strip()
@@ -417,8 +439,6 @@ def filter_app_tv_items(items: List[Dict[str, Any]],
 
 def media_overview(item: Dict[str, Any], mtype: str) -> Optional[str]:
     parts = []
-    if item.get("app_section"):
-        parts.append(f"App频道：{item['app_section']}")
     total = item.get("total_episodes")
     latest = item.get("latest_episode")
     if mtype in {"tv", "anime", "children"}:
